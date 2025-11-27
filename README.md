@@ -4,6 +4,9 @@
 
 This project is a technical demonstration of high-performance 3D graphics in the browser using **React**, **Three.js**, and **WebGL shaders**.
 
+# Play NOW
+https://games.truejust.org/
+
 ---
 
 ## 🚀 Tech Stack
@@ -23,7 +26,7 @@ This project is a technical demonstration of high-performance 3D graphics in the
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-username/lumina-flow.git
+    git clone https://github.com/unlimitedinfinit/lumina-flow.git
     cd lumina-flow
     ```
 
