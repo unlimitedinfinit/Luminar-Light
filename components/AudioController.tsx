@@ -308,6 +308,37 @@ const AudioController: React.FC<AudioControllerProps> = ({ vibe, isPlaying, onAu
       osc.stop(ctx.currentTime + 1);
   }
 
+  const playDestroy = () => {
+      const ctx = audioCtxRef.current;
+      if (!ctx || ctx.state === 'suspended') return;
+      
+      // Digital crunch/explosion sound
+      const bufferSize = ctx.sampleRate * 0.2;
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1);
+      }
+      
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+      
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(500, ctx.currentTime);
+      filter.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.2);
+      
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+      
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+      
+      noise.start();
+  }
+
   useEffect(() => {
     if (!isPlaying) {
         if (schedulerRef.current) clearTimeout(schedulerRef.current);
@@ -361,7 +392,8 @@ const AudioController: React.FC<AudioControllerProps> = ({ vibe, isPlaying, onAu
     onAudioReady({
         playCollect,
         playLevelComplete,
-        playAsteroid
+        playAsteroid,
+        playDestroy
     });
   }, [vibe]);
 

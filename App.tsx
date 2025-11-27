@@ -3,8 +3,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import GameCanvas from './components/GameCanvas';
 import AudioController from './components/AudioController';
 import { GameState, SandboxSettings, VibeSettings, AudioControls } from './types';
-import { getLevel, THEMES, COMPLETION_MESSAGES } from './constants';
-import { Play, RotateCcw, ArrowRight, Zap, Move, Palette, Maximize, Infinity as InfinityIcon, Clock, Eye, Headphones, ChevronLeft, ChevronRight, FastForward } from 'lucide-react';
+import { getLevel, THEMES, COMPLETION_MESSAGES, PARTICLE_COUNT, LORE_FRAGMENTS } from './constants';
+import { Play, RotateCcw, ArrowRight, Zap, Move, Palette, Maximize, Infinity as InfinityIcon, Clock, Eye, Headphones, ChevronLeft, ChevronRight, FastForward, ChevronDown, ChevronUp, Split, Magnet, Shield, Activity, Terminal } from 'lucide-react';
 
 const App: React.FC = () => {
   const [levelIndex, setLevelIndex] = useState(0);
@@ -13,7 +13,10 @@ const App: React.FC = () => {
     collectedCount: 0,
     isLevelComplete: false,
     isPlaying: false,
+    showStartScreen: true,
   });
+
+  const [activeParticleCount, setActiveParticleCount] = useState(0);
 
   const [sandbox, setSandbox] = useState<SandboxSettings>({
     gravityMult: 1,
@@ -22,6 +25,10 @@ const App: React.FC = () => {
     rainbowMode: false,
     giantMode: false,
     infiniteAmmo: false,
+    symmetry: false,
+    mouseAttractor: false,
+    invincibility: false,
+    hyperTrails: false,
   });
 
   const [vibe, setVibe] = useState<VibeSettings>({
@@ -31,13 +38,20 @@ const App: React.FC = () => {
   });
 
   const [isMenuOpen, setIsMenuOpen] = useState(true);
+  const [isLevelSelectOpen, setIsLevelSelectOpen] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const audioRef = useRef<AudioControls | null>(null);
   const [fuel, setFuel] = useState(100); 
   const [completionMsg, setCompletionMsg] = useState("");
+  const [loreMsg, setLoreMsg] = useState("");
 
   const currentLevelConfig = useMemo(() => getLevel(levelIndex), [levelIndex]);
   const currentTheme = THEMES[vibe.themeId];
+
+  useEffect(() => {
+      const msg = LORE_FRAGMENTS[Math.floor(Math.random() * LORE_FRAGMENTS.length)];
+      setLoreMsg(msg);
+  }, [levelIndex, resetKey]);
 
   useEffect(() => {
     if (currentLevelConfig.particleBudget) {
@@ -58,6 +72,10 @@ const App: React.FC = () => {
     setGameState(prev => ({ ...prev, collectedCount: count }));
   };
 
+  const handleActiveCount = (count: number) => {
+      setActiveParticleCount(count);
+  };
+
   const nextLevel = () => {
     const nextIdx = levelIndex + 1;
     setLevelIndex(nextIdx);
@@ -65,8 +83,10 @@ const App: React.FC = () => {
       currentLevel: nextIdx + 1,
       collectedCount: 0,
       isLevelComplete: false,
-      isPlaying: true,
+      isPlaying: false, 
+      showStartScreen: true, 
     });
+    setActiveParticleCount(0);
   };
 
   const jumpToLevel = (idx: number) => {
@@ -75,8 +95,10 @@ const App: React.FC = () => {
         currentLevel: idx + 1,
         collectedCount: 0,
         isLevelComplete: false,
-        isPlaying: true,
+        isPlaying: false,
+        showStartScreen: true,
     });
+    setActiveParticleCount(0);
   }
 
   const restartLevel = () => {
@@ -84,12 +106,19 @@ const App: React.FC = () => {
       ...prev,
       collectedCount: 0,
       isLevelComplete: false,
+      isPlaying: false,
+      showStartScreen: true,
     }));
     if (currentLevelConfig.particleBudget) {
         setFuel(currentLevelConfig.particleBudget);
     }
     setResetKey(prev => prev + 1);
+    setActiveParticleCount(0);
   };
+
+  const startGame = () => {
+      setGameState(prev => ({ ...prev, isPlaying: true, showStartScreen: false }));
+  }
 
   const toggleSandbox = (key: keyof SandboxSettings) => {
       setSandbox(prev => {
@@ -125,6 +154,19 @@ const App: React.FC = () => {
 
   const difficultyLabel = getDifficultyLabel(currentLevelConfig.id);
 
+  const completionRatio = currentLevelConfig.requiredCount > 0 
+    ? Math.min(1, gameState.collectedCount / currentLevelConfig.requiredCount)
+    : 0;
+
+  // MECHANIC TIPS
+  const getMechanicTip = () => {
+      if (currentLevelConfig.conversionRequired) return "TIP: Route particles through the Prism to charge them.";
+      if (currentLevelConfig.portals && currentLevelConfig.portals.length > 0) return "TIP: Use Portals to bypass the barrier.";
+      if (currentLevelConfig.isBossLevel) return "WARNING: Avoid the rotating Hazard Sector.";
+      return null;
+  };
+  const mechanicTip = getMechanicTip();
+
   return (
     <div 
       className="flex w-full h-screen bg-black text-white font-sans overflow-hidden select-none"
@@ -137,6 +179,7 @@ const App: React.FC = () => {
         onAudioReady={(ctrl) => audioRef.current = ctrl} 
       />
 
+      {/* SIDEBAR */}
       <div 
         className={`relative flex-shrink-0 bg-black/90 backdrop-blur-xl border-r border-gray-800 z-20 flex flex-col transition-all duration-500 ease-in-out overflow-hidden ${isMenuOpen ? 'w-80 translate-x-0' : 'w-0 -translate-x-full opacity-0'}`}
       >
@@ -145,9 +188,16 @@ const App: React.FC = () => {
                 <h2 className="text-xl font-bold text-cyan-400 tracking-wider">SYSTEM</h2>
             </div>
 
-            <div>
-                <h3 className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">Level Select</h3>
-                <div className="grid grid-cols-5 gap-1">
+            <div className="border-b border-gray-800 pb-4">
+                <button 
+                  onClick={() => setIsLevelSelectOpen(!isLevelSelectOpen)}
+                  className="w-full flex justify-between items-center text-[10px] uppercase tracking-widest text-gray-500 mb-2 hover:text-gray-300 transition-colors group"
+                >
+                  <span className="group-hover:text-cyan-400 transition-colors">Level Select</span>
+                  {isLevelSelectOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+                
+                <div className={`grid grid-cols-5 gap-1 transition-all duration-300 overflow-hidden ${isLevelSelectOpen ? 'max-h-[500px] opacity-100 mt-2' : 'max-h-0 opacity-0'}`}>
                     {Array.from({ length: 50 }, (_, i) => i).map(i => (
                         <button 
                             key={i}
@@ -175,7 +225,7 @@ const App: React.FC = () => {
                     </div>
                     <div className="flex justify-between">
                         <span>Particles:</span>
-                        <span>4,000</span>
+                        <span>{activeParticleCount.toLocaleString()} <span className="text-gray-600">/ {PARTICLE_COUNT.toLocaleString()}</span></span>
                     </div>
                     <div className="flex justify-between">
                         <span>Reservoir:</span>
@@ -293,6 +343,38 @@ const App: React.FC = () => {
 
                         <div className="grid grid-cols-2 gap-1.5">
                             <button 
+                            onClick={() => toggleSandbox('symmetry')}
+                            className={`flex items-center justify-between px-2 py-1.5 rounded text-[10px] border transition-all ${sandbox.symmetry ? 'bg-indigo-900/30 border-indigo-500 text-indigo-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                            >
+                            <span className="flex items-center gap-1"><Split size={10} /> Symmetry</span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${sandbox.symmetry ? 'bg-indigo-500' : 'bg-gray-700'}`} />
+                            </button>
+
+                             <button 
+                            onClick={() => toggleSandbox('mouseAttractor')}
+                            className={`flex items-center justify-between px-2 py-1.5 rounded text-[10px] border transition-all ${sandbox.mouseAttractor ? 'bg-red-900/30 border-red-500 text-red-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                            >
+                            <span className="flex items-center gap-1"><Magnet size={10} /> Mouse Grav</span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${sandbox.mouseAttractor ? 'bg-red-500' : 'bg-gray-700'}`} />
+                            </button>
+
+                             <button 
+                            onClick={() => toggleSandbox('invincibility')}
+                            className={`flex items-center justify-between px-2 py-1.5 rounded text-[10px] border transition-all ${sandbox.invincibility ? 'bg-teal-900/30 border-teal-500 text-teal-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                            >
+                            <span className="flex items-center gap-1"><Shield size={10} /> Invincible</span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${sandbox.invincibility ? 'bg-teal-500' : 'bg-gray-700'}`} />
+                            </button>
+
+                             <button 
+                            onClick={() => toggleSandbox('hyperTrails')}
+                            className={`flex items-center justify-between px-2 py-1.5 rounded text-[10px] border transition-all ${sandbox.hyperTrails ? 'bg-orange-900/30 border-orange-500 text-orange-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                            >
+                            <span className="flex items-center gap-1"><Activity size={10} /> Hyper Trails</span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${sandbox.hyperTrails ? 'bg-orange-500' : 'bg-gray-700'}`} />
+                            </button>
+
+                            <button 
                             onClick={() => toggleSandbox('gravityMult')}
                             className={`flex items-center justify-between px-2 py-1.5 rounded text-[10px] border transition-all ${sandbox.gravityMult > 1 ? 'bg-pink-900/30 border-pink-500 text-pink-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
                             >
@@ -330,7 +412,7 @@ const App: React.FC = () => {
         </div>
         
         <div className="p-4 border-t border-gray-800 text-[9px] text-gray-600">
-            LUMINA FLOW v3.0
+            LUMINA FLOW v3.5
         </div>
       </div>
 
@@ -356,12 +438,14 @@ const App: React.FC = () => {
             levelConfig={currentLevelConfig}
             onLevelComplete={handleLevelComplete}
             onProgress={handleProgress}
+            onActiveCount={handleActiveCount}
             isPaused={!gameState.isPlaying}
             sandboxSettings={sandbox}
             setFuel={setFuel}
             theme={currentTheme}
             audioControls={audioRef.current}
             resetKey={resetKey}
+            completionRatio={completionRatio}
             />
         </div>
 
@@ -382,6 +466,11 @@ const App: React.FC = () => {
                             <span className="text-sm bg-red-600 text-white font-bold px-3 py-1 rounded animate-pulse shadow-[0_0_15px_rgba(220,38,38,0.5)]">
                                 BOSS ZONE
                             </span>
+                        )}
+                        {mechanicTip && (
+                            <div className="ml-4 px-3 py-1 bg-blue-900/40 border border-blue-500 text-blue-200 text-xs font-mono tracking-wide rounded animate-pulse">
+                                {mechanicTip}
+                            </div>
                         )}
                     </div>
                 </div>
@@ -417,46 +506,60 @@ const App: React.FC = () => {
                             <div className="text-[10px] text-yellow-500/70 mt-1 uppercase tracking-wider text-right">Emitter Reserves</div>
                         </div>
                     )}
+                    
+                     <div className="h-4 text-[10px] font-mono text-cyan-500/50 uppercase tracking-widest text-right animate-pulse">
+                         {Math.random() > 0.995 ? "SYSTEM WATCHING" : Math.random() > 0.995 ? "ENTROPY INCREASING" : ""}
+                     </div>
                 </div>
             </div>
 
             <div className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-500 ${isMenuOpen ? 'ml-72' : 'ml-0'}`}>
-            {!gameState.isPlaying && !gameState.isLevelComplete && (
-                <div className="bg-black/40 backdrop-blur-md border border-cyan-500/30 p-12 rounded-3xl text-center pointer-events-auto shadow-2xl shadow-cyan-900/20 max-w-xl select-none">
-                <h2 className="text-4xl mb-6 font-light text-cyan-100">Initialize Sequence</h2>
-                <p className="text-gray-300 mb-6 text-lg leading-relaxed">
-                    Guide the aging swarm to the target. <br/>
-                    <span className="text-cyan-400 font-bold" style={{color: currentTheme.colors.primary}}>Draw paths</span> to direct the flow.
-                </p>
-                {currentLevelConfig.particleBudget && (
-                    <div className="bg-yellow-900/20 border border-yellow-500/30 p-4 rounded-xl mb-8">
-                         <p className="text-yellow-200 text-sm">
-                            <span className="font-bold">WARNING:</span> Limited Particle Reserves.<br/>
-                            Swarm emits automatically. Don't waste it.
-                         </p>
-                    </div>
-                )}
-                <button 
-                    onClick={() => setGameState(prev => ({ ...prev, isPlaying: true }))}
-                    className="group flex items-center justify-center gap-3 mx-auto px-12 py-5 bg-cyan-600 hover:bg-cyan-500 rounded-full transition-all hover:scale-105 font-bold tracking-wide shadow-lg shadow-cyan-900/50 text-lg"
-                    style={{ backgroundColor: currentTheme.colors.primary, boxShadow: `0 10px 30px ${currentTheme.colors.primary}50` }}
-                >
-                    <Play size={28} fill="currentColor" />
-                    BEGIN SIMULATION
-                </button>
+            
+            {!gameState.isPlaying && !gameState.isLevelComplete && gameState.showStartScreen && (
+                <div className="bg-black/80 backdrop-blur-md border border-cyan-500/30 p-10 rounded-lg text-center pointer-events-auto shadow-2xl shadow-cyan-900/10 max-w-lg select-none">
+                    <div className="text-cyan-400 mb-4 animate-pulse"><Terminal size={32} className="mx-auto" /></div>
+                    <h2 className="text-xl mb-4 font-mono text-cyan-200 tracking-widest border-b border-cyan-900 pb-2">SYSTEM INTERCEPT</h2>
+                    <p className="text-gray-300 mb-8 text-md font-mono leading-relaxed opacity-80 min-h-[60px] flex items-center justify-center">
+                        "{loreMsg}"
+                    </p>
+                    <button 
+                        onClick={startGame}
+                        className="group relative flex items-center justify-center gap-2 mx-auto px-10 py-3 bg-cyan-900/40 hover:bg-cyan-500/20 rounded-sm transition-all border border-cyan-500/50 hover:border-cyan-400 text-cyan-200 font-mono tracking-widest text-sm overflow-hidden"
+                    >
+                        <span className="relative z-10">INITIATE PROTOCOL</span>
+                        <div className="absolute inset-0 bg-cyan-500/10 transform -translate-x-full group-hover:translate-x-0 transition-transform duration-300"></div>
+                    </button>
                 </div>
             )}
 
+            {!gameState.isPlaying && !gameState.isLevelComplete && !gameState.showStartScreen && (
+                <div className="hidden"></div> 
+            )}
+
             {gameState.isLevelComplete && (
-                <div className="bg-black/60 backdrop-blur-lg border border-green-500/30 p-12 rounded-3xl text-center pointer-events-auto animate-in fade-in zoom-in duration-300 max-w-xl select-none">
-                <h2 className="text-5xl mb-4 font-bold text-green-400" style={{color: currentTheme.colors.primary}}>Harmony Achieved</h2>
-                <p className="text-gray-300 mb-10 text-xl font-light italic">"{completionMsg}"</p>
+                <div className="bg-black/90 backdrop-blur-xl border border-green-500/50 p-8 rounded-sm text-center pointer-events-auto animate-in fade-in zoom-in duration-300 max-w-lg select-none shadow-[0_0_50px_rgba(34,197,94,0.2)]">
+                <div className="border-b border-green-900/50 pb-4 mb-6">
+                    <h2 className="text-2xl font-mono text-green-500 uppercase tracking-widest mb-1">Session Report</h2>
+                    <div className="text-[10px] text-green-700 font-mono">{new Date().toISOString()} // LOG_ID_442</div>
+                </div>
+                
+                <div className="font-mono text-green-300 mb-8 text-lg typing-effect min-h-[60px] flex items-center justify-center">
+                    &gt; {completionMsg}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 mb-8 text-[11px] font-mono text-green-600">
+                    <div className="border border-green-900/30 p-2">CYCLES: {Math.floor(Math.random()*5000)}</div>
+                    <div className="border border-green-900/30 p-2">EFFICIENCY: {90 + Math.floor(Math.random()*10)}%</div>
+                    <div className="border border-green-900/30 p-2">LOSS: {Math.floor(Math.random() * 25 + 5)}.{Math.floor(Math.random()*9)}%</div>
+                    <div className="border border-green-900/30 p-2">SYNC: STABLE</div>
+                </div>
+
                 <button 
                     onClick={nextLevel}
-                    className="flex items-center justify-center gap-3 mx-auto px-12 py-5 bg-white text-black hover:bg-gray-200 rounded-full transition-all hover:scale-105 font-bold shadow-[0_0_30px_rgba(255,255,255,0.4)] text-lg"
+                    className="w-full flex items-center justify-center gap-3 px-8 py-4 bg-green-900/20 text-green-400 hover:bg-green-500 hover:text-black border border-green-500 transition-all font-mono uppercase tracking-widest text-sm"
                 >
-                    Next Level
-                    <ArrowRight size={28} />
+                    Initialize Next Level
+                    <ArrowRight size={16} />
                 </button>
                 </div>
             )}

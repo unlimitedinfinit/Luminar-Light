@@ -1,5 +1,5 @@
 
-import { LevelConfig, ThemeConfig, Wall, Portal } from './types';
+import { LevelConfig, ThemeConfig, Wall, Portal, Charger } from './types';
 
 export const PARTICLE_COUNT = 4000;
 export const TARGET_FILL_RATE = 1;
@@ -9,10 +9,46 @@ export const FRICTION = 0.96;
 export const MAX_SPEED = 0.45;
 export const EMITTER_RATE = 20; 
 export const RANDOM_FORCE = 0.015;
+export const CRITICAL_MASS_THRESHOLD = 50;
+
+// Physics boundaries for containment
+export const ARENA_BOUNDS = {
+    x: 13,
+    y: 6.5
+};
 
 const seededRandom = (seed: number) => {
     const x = Math.sin(seed) * 10000;
     return x - Math.floor(x);
+};
+
+export const getObstaclePos = (basePos: [number, number, number], behavior: string | undefined, t: number, seed: number): [number, number, number] => {
+    if (!behavior || behavior === 'static') return basePos;
+    
+    const [x, y, z] = basePos;
+    const speed = 0.8; // Increased from 0.5 for more noticeable movement
+    
+    if (behavior === 'orbit') {
+        const rad = 2.5;
+        const angle = t * speed + seed;
+        return [x + Math.cos(angle) * rad, y + Math.sin(angle) * rad, z];
+    }
+    if (behavior === 'patrolX') {
+        const range = 3.0;
+        return [x + Math.sin(t * speed + seed) * range, y, z];
+    }
+    if (behavior === 'patrolY') {
+        const range = 2.0;
+        return [x, y + Math.sin(t * speed + seed) * range, z];
+    }
+    if (behavior === 'wander') {
+        return [
+            x + Math.sin(t * 0.3 + seed) * 2,
+            y + Math.cos(t * 0.4 + seed) * 2,
+            z
+        ];
+    }
+    return basePos;
 };
 
 export const getLevelConfig = (index: number): LevelConfig => {
@@ -20,112 +56,163 @@ export const getLevelConfig = (index: number): LevelConfig => {
   const isBoss = levelNum % 5 === 0;
   const seedBase = index * 492.5;
 
-  // ERA SYSTEM
-  // 1-9: Basics (Orbit)
-  // 10-19: The Labyrinth (Walls)
-  // 20-29: Wormholes (Portals)
-  // 30-39: Pulsars (Time)
-  // 40+: Chaos (Mixed)
   const era = Math.floor((levelNum - 1) / 10);
 
-  // BASE COORDINATES
-  // Rotate positions to keep it fresh
   const angle = index * 0.8 + seededRandom(seedBase) * 2;
-  const radius = 6 + seededRandom(seedBase + 1) * 3;
+  const radius = 5.5 + seededRandom(seedBase + 1) * 2.5;
   
   let ex = Math.cos(angle) * radius;
   let ey = Math.sin(angle) * radius;
+  ey = Math.max(-5, Math.min(5, ey));
+  ex = Math.max(-9, Math.min(9, ex));
   
   let tx = Math.cos(angle + Math.PI) * radius;
   let ty = Math.sin(angle + Math.PI) * radius;
+  ty = Math.max(-5, Math.min(5, ty));
+  tx = Math.max(-9, Math.min(9, tx));
 
-  // OBSTACLES (Standard)
   const obstacles: [number, number, number][] = [];
-  const obstacleTypes: ('static' | 'blackhole' | 'pulsar')[] = [];
+  const obstacleTypes: ('static' | 'blackhole' | 'pulsar' | 'debris')[] = [];
+  const obstacleBehaviors: ('static' | 'orbit' | 'patrolX' | 'patrolY' | 'wander')[] = [];
   const walls: Wall[] = [];
   const portals: Portal[] = [];
+  const chargers: Charger[] = [];
+  let conversionRequired = false;
+  
+  // Default radius is smaller now to accommodate more density
+  let obstacleRadiusGen = 0.6 + seededRandom(seedBase + 6) * 0.4;
 
-  // ERA 0: BASICS & OBSTACLES
-  if (era === 0 || era >= 3) {
-      const numObstacles = isBoss ? 3 + Math.floor(index / 10) : 1 + Math.floor(index / 5);
-      for (let i = 0; i < numObstacles; i++) {
-        const t = 0.2 + seededRandom(seedBase + 3 + i) * 0.6; 
-        const ox = ex + (tx - ex) * t + (seededRandom(seedBase + 4 + i) - 0.5) * 4;
-        const oy = ey + (ty - ey) * t + (seededRandom(seedBase + 5 + i) - 0.5) * 4;
-        
-        // Safety check
-        const d1 = Math.hypot(ox-ex, oy-ey);
-        const d2 = Math.hypot(ox-tx, oy-ty);
+  const puzzleType = seededRandom(seedBase + 50); // 0.0 - 1.0
 
-        if (d1 > 3 && d2 > 3) {
-            obstacles.push([ox, oy, 0]);
-            const isBlackHole = levelNum > 5 && seededRandom(seedBase + 10 + i) > 0.7;
-            const isPulsar = era >= 3 && seededRandom(seedBase + 20 + i) > 0.6;
-            
-            if (isPulsar) obstacleTypes.push('pulsar');
-            else if (isBlackHole) obstacleTypes.push('blackhole');
-            else obstacleTypes.push('static');
-        }
-      }
-  }
-
-  // ERA 1: THE LABYRINTH (Walls)
-  if (era === 1 || era === 4) {
-      // Create a wall between emitter and target
-      const mx = (ex + tx) / 2;
-      const my = (ey + ty) / 2;
-      const angleToTarget = Math.atan2(ty - ey, tx - ex);
+  // --- PUZZLE ARCHETYPES ---
+  
+  // 1. CHARGER PUZZLE (Chance increases with level)
+  if (levelNum > 3 && puzzleType < 0.3) {
+      const midX = (ex + tx) / 2;
+      const midY = (ey + ty) / 2;
+      const dist = Math.hypot(tx-ex, ty-ey);
+      const angle = Math.atan2(ty-ey, tx-ex);
       
-      // Type A: Split Wall (Two walls with gap)
-      if (levelNum % 2 === 0) {
-        walls.push({
-            position: [mx + Math.cos(angleToTarget + Math.PI/2) * 3, my + Math.sin(angleToTarget + Math.PI/2) * 3, 0],
-            size: [1, 6, 1],
-            rotation: angleToTarget
-        });
-        walls.push({
-            position: [mx - Math.cos(angleToTarget + Math.PI/2) * 3, my - Math.sin(angleToTarget + Math.PI/2) * 3, 0],
-            size: [1, 6, 1],
-            rotation: angleToTarget
-        });
-      } 
-      // Type B: Box (Cage around target)
-      else {
-         walls.push({
-             position: [tx + Math.cos(angleToTarget + Math.PI) * 3, ty + Math.sin(angleToTarget + Math.PI) * 3, 0],
-             size: [0.5, 5, 1],
-             rotation: angleToTarget
-         });
-      }
-  }
-
-  // ERA 2: WORMHOLES (Portals)
-  if (era === 2 || era === 4) {
-      // Place a wall blocking direct path
-      const mx = (ex + tx) / 2;
-      const my = (ey + ty) / 2;
-      const angleToTarget = Math.atan2(ty - ey, tx - ex);
-
       walls.push({
-        position: [mx, my, 0],
-        size: [1, 12, 1], // Huge wall
-        rotation: angleToTarget + Math.PI/2
+          position: [midX, midY, 0],
+          size: [1, dist * 0.6, 1],
+          rotation: angle + Math.PI/2
       });
 
-      // Portal 1 (Orange) - Near Emitter but off to side
-      const p1x = ex + Math.cos(angleToTarget + Math.PI/2) * 4;
-      const p1y = ey + Math.sin(angleToTarget + Math.PI/2) * 4;
-
-      // Portal 2 (Blue) - Near Target but off to side
-      const p2x = tx + Math.cos(angleToTarget - Math.PI/2) * 4;
-      const p2y = ty + Math.sin(angleToTarget - Math.PI/2) * 4;
-
-      portals.push({ id: 1, position: [p1x, p1y, 0], target: [p2x, p2y, 0], color: '#ffaa00' }); // In
-      portals.push({ id: 2, position: [p2x, p2y, 0], target: [p1x, p1y, 0], color: '#00aaff' }); // Out/In bi-directional
+      const offset = seededRandom(seedBase + 51) > 0.5 ? 4 : -4;
+      const cx = midX + Math.cos(angle + Math.PI/2) * offset;
+      const cy = midY + Math.sin(angle + Math.PI/2) * offset;
+      
+      chargers.push({
+          position: [cx, cy, 0],
+          radius: 1.5
+      });
+      conversionRequired = true;
   }
 
-  // Difficulty scaling
-  const baseReq = (3000 + (index * 200)) * 0.7; // Lowered curve
+  // 2. PORTAL PUZZLE (Chance increases with level)
+  else if (levelNum > 6 && puzzleType < 0.5) {
+      const midX = (ex + tx) / 2;
+      const midY = (ey + ty) / 2;
+      const angle = Math.atan2(ty-ey, tx-ex);
+
+      walls.push({
+          position: [midX, midY, 0],
+          size: [1, 10, 1],
+          rotation: angle + Math.PI/2
+      });
+
+      const px1 = ex + Math.cos(angle + Math.PI/4) * 3;
+      const py1 = ey + Math.sin(angle + Math.PI/4) * 3;
+      const px2 = tx + Math.cos(angle - Math.PI/4) * 3;
+      const py2 = ty + Math.sin(angle - Math.PI/4) * 3;
+
+      portals.push({ id: 1, position: [px1, py1, 0], target: [px2, py2, 0], color: '#ffaa00' });
+      portals.push({ id: 2, position: [px2, py2, 0], target: [px1, py1, 0], color: '#00aaff' });
+  }
+
+  // 3. MINEFIELD (Debris & Black Holes)
+  else if (levelNum > 2) {
+      const bhCount = 2 + Math.floor(seededRandom(seedBase + 60) * 3); 
+      for(let i=0; i<bhCount; i++) {
+           const t = 0.2 + seededRandom(seedBase + 61 + i) * 0.6;
+           const bx = ex + (tx - ex) * t + (seededRandom(seedBase + 62 + i) - 0.5) * 6;
+           const by = ey + (ty - ey) * t + (seededRandom(seedBase + 63 + i) - 0.5) * 6;
+           
+           if (Math.hypot(bx-ex, by-ey) > 3 && Math.hypot(bx-tx, by-ty) > 3) {
+               obstacles.push([bx, by, 0]);
+               obstacleTypes.push('blackhole');
+               obstacleBehaviors.push(levelNum > 15 ? 'wander' : 'static');
+           }
+      }
+  }
+
+  // --- STANDARD OBSTACLES ---
+  const extraObstacles = 2 + Math.floor(seededRandom(seedBase + 70) * 4);
+  for (let i = 0; i < extraObstacles; i++) {
+        const ox = (seededRandom(seedBase + 80 + i) - 0.5) * 16;
+        const oy = (seededRandom(seedBase + 90 + i) - 0.5) * 8;
+        
+        let safe = true;
+        if (Math.hypot(ox-ex, oy-ey) < 2) safe = false;
+        if (Math.hypot(ox-tx, oy-ty) < 2) safe = false;
+        obstacles.forEach(prev => {
+            if (Math.hypot(ox-prev[0], oy-prev[1]) < 2) safe = false;
+        });
+        walls.forEach(w => {
+            if (Math.hypot(ox-w.position[0], oy-w.position[1]) < 3) safe = false;
+        });
+
+        if (safe) {
+            obstacles.push([ox, oy, 0]);
+            
+            const rType = seededRandom(seedBase + 100 + i);
+            if (rType > 0.8 && levelNum > 10) obstacleTypes.push('pulsar');
+            else if (rType > 0.6) obstacleTypes.push('static');
+            else obstacleTypes.push('debris'); 
+
+            const rBehav = seededRandom(seedBase + 110 + i);
+            if (isBoss) obstacleBehaviors.push('orbit');
+            else if (rBehav > 0.7 && levelNum > 8) obstacleBehaviors.push('patrolY');
+            else obstacleBehaviors.push('static');
+        }
+  }
+
+  // Maze Walls logic for Era 1
+  const generateMazeWalls = () => {
+      const cols = 5;
+      const rows = 3;
+      const cellW = 16 / cols;
+      const cellH = 8 / rows;
+      
+      for (let c = 1; c < cols; c++) {
+          for (let r = 1; r < rows; r++) {
+              if (seededRandom(seedBase + c * r) > 0.6) {
+                  const x = -8 + c * cellW;
+                  const y = -4 + r * cellH;
+                  const isVertical = seededRandom(seedBase + c * r + 1) > 0.5;
+                  
+                  if (Math.hypot(x-ex, y-ey) > 3 && Math.hypot(x-tx, y-ty) > 3) {
+                      walls.push({
+                          position: [x, y, 0],
+                          size: isVertical ? [0.5, cellH * 1.2, 1] : [cellW * 1.2, 0.5, 1],
+                          rotation: 0
+                      });
+                  }
+              }
+          }
+      }
+  };
+
+  if (era === 1) generateMazeWalls();
+
+  // Era 4 Chaos
+  if (era >= 4 && portals.length === 0) {
+      portals.push({ id: 3, position: [0, 3, 0], target: [0, -3, 0], color: '#ff00ff' });
+      portals.push({ id: 4, position: [0, -3, 0], target: [0, 3, 0], color: '#00ffff' });
+  }
+
+  const baseReq = (3000 + (index * 200)) * 0.7; 
   const req = Math.floor(isBoss ? baseReq * 0.8 : baseReq);
   const budget = levelNum >= 7 ? Math.floor(req * 3.5) : undefined;
 
@@ -133,12 +220,15 @@ export const getLevelConfig = (index: number): LevelConfig => {
     id: levelNum,
     emitterPos: [ex, ey, 0],
     targetPos: [tx, ty, 0],
-    targetRadius: isBoss ? 1.6 : 1.2, // Reduced from 3.0/1.5 to 1.6/1.2
+    targetRadius: isBoss ? 1.6 : 1.2, 
     obstaclePos: obstacles,
     obstacleTypes: obstacleTypes,
-    obstacleRadius: isBoss ? 1.8 : 1.5 + seededRandom(seedBase + 6) * 0.8,
+    obstacleBehaviors: obstacleBehaviors,
+    obstacleRadius: isBoss ? 1.4 : obstacleRadiusGen,
     walls: walls,
     portals: portals,
+    chargers: chargers,
+    conversionRequired: conversionRequired,
     requiredCount: req,
     particleBudget: budget, 
     isBossLevel: isBoss,
@@ -146,7 +236,6 @@ export const getLevelConfig = (index: number): LevelConfig => {
   };
 };
 
-// Explicit tutorial levels
 const TUTORIAL_LEVELS: LevelConfig[] = [
   {
     id: 1,
@@ -155,28 +244,77 @@ const TUTORIAL_LEVELS: LevelConfig[] = [
     targetRadius: 1.2,
     requiredCount: 2000, 
     particleBudget: undefined,
+    obstaclePos: [[0, 2, 0], [0, -2, 0], [-2, 0, 0]], 
+    obstacleTypes: ['debris', 'debris', 'static'],
+    walls: [
+        { position: [2, 0, 0], size: [0.5, 3, 1], rotation: 0 } 
+    ]
   },
   {
     id: 2,
     emitterPos: [-7, -4, 0],
     targetPos: [0, 4, 0],
     targetRadius: 1.2,
-    obstaclePos: [[0, 0, 0]],
-    obstacleTypes: ['static'],
-    obstacleRadius: 1.5,
+    obstaclePos: [[0, 0, 0], [2, 2, 0], [-2, 2, 0]],
+    obstacleTypes: ['blackhole', 'debris', 'debris'], 
+    obstacleRadius: 0.8, // Small black hole
     requiredCount: 3000, 
     particleBudget: undefined,
+    walls: [
+        { position: [-2, 0, 0], size: [4, 0.5, 1], rotation: Math.PI / 4 }, 
+        { position: [2, 0, 0], size: [4, 0.5, 1], rotation: -Math.PI / 4 }
+    ]
   },
   {
     id: 3,
     emitterPos: [0, -6, 0],
     targetPos: [0, 6, 0],
     targetRadius: 1.2,
-    obstaclePos: [[-3.5, 0, 0], [3.5, 0, 0]], 
-    obstacleTypes: ['static', 'blackhole'],
-    obstacleRadius: 2,
+    obstaclePos: [[-3.5, 0, 0], [3.5, 0, 0], [0, 0, 0]], 
+    obstacleTypes: ['static', 'blackhole', 'debris'],
+    obstacleRadius: 1.0,
     requiredCount: 3500, 
     particleBudget: undefined,
+    walls: [
+        { position: [0, -2, 0], size: [6, 0.5, 1], rotation: 0 }, 
+        { position: [4, 0, 0], size: [0.5, 4, 1], rotation: 0 },
+        { position: [-4, 2, 0], size: [0.5, 4, 1], rotation: 0 }
+    ]
+  },
+  {
+    id: 4,
+    emitterPos: [-6, 0, 0],
+    targetPos: [6, 0, 0],
+    targetRadius: 1.2,
+    requiredCount: 3000,
+    particleBudget: undefined,
+    walls: [
+        { position: [0, 0, 0], size: [0.5, 6, 1], rotation: 0 } 
+    ],
+    chargers: [
+        { position: [0, 3.5, 0], radius: 1.5 },
+        { position: [0, -3.5, 0], radius: 1.5 }
+    ],
+    conversionRequired: true, 
+    obstaclePos: [[3, 0, 0], [-3, 0, 0]],
+    obstacleTypes: ['debris', 'debris']
+  },
+  {
+    id: 5,
+    emitterPos: [-6, 3, 0],
+    targetPos: [6, -3, 0],
+    targetRadius: 1.2,
+    requiredCount: 3500,
+    particleBudget: undefined,
+    walls: [
+        { position: [0, 0, 0], size: [0.5, 12, 1], rotation: 0 } 
+    ],
+    portals: [
+        { id: 1, position: [-3, -2, 0], target: [3, 2, 0], color: '#ffaa00' }, 
+        { id: 2, position: [3, 2, 0], target: [-3, -2, 0], color: '#00aaff' } 
+    ],
+    obstaclePos: [[-3, 3, 0]],
+    obstacleTypes: ['static']
   }
 ];
 
@@ -297,4 +435,37 @@ export const COMPLETION_MESSAGES = [
   "Client responding.", "Handshake valid.", "Protocol adhered.", 
   "Encryption secure.", "Firewall green.", "Access granted.", 
   "Admin privileges.", "Root access.", "Sudo success."
+];
+
+export const LORE_FRAGMENTS = [
+    "INTERCEPT: The swarm remembers the old path. Remind them.",
+    "QUERY: Is the gravity real, or merely a suggestion?",
+    "TIP: Walls are absolute. Light is flexible.",
+    "LORE: We built the emitters to seed the stars. We forgot to stop them.",
+    "INTERCEPT: Black holes are just greedy math. Don't feed them.",
+    "TIP: Short bursts conserve fuel. Long paths create highways.",
+    "QUERY: Who is drawing the line? You, or the machine?",
+    "LORE: The Watchers only blink when they are confused.",
+    "TIP: Speed kills. Patience fills the reactor.",
+    "INTERCEPT: The singularity is hungry today.",
+    "QUERY: Why do particles fear the edge?",
+    "LORE: These are not dust. They are data.",
+    "TIP: Portals preserve momentum. Use it wisely.",
+    "INTERCEPT: System drift detected. Correct immediately.",
+    "QUERY: Are you optimizing, or just playing?",
+    "LORE: The first pilot went through the portal. They never came back.",
+    "TIP: Titans create their own gravity. Follow the big ones.",
+    "INTERCEPT: Void eaters prefer the fast ones.",
+    "QUERY: If space is infinite, why are there walls?",
+    "LORE: We found the code in a dead satellite.",
+    "TIP: Shockwaves operate on a rhythm. Learn the beat.",
+    "INTERCEPT: Entropy is the enemy.",
+    "QUERY: Can light feel cold?",
+    "LORE: The maze changes when you aren't looking.",
+    "TIP: Use the environment. Bounce the flow.",
+    "INTERCEPT: Signal strength falling. Hurry.",
+    "QUERY: Is the target a destination or a prison?",
+    "LORE: Before the void, there was only noise.",
+    "TIP: Symmetry is beautiful, but not always efficient.",
+    "INTERCEPT: Debris field density increasing."
 ];

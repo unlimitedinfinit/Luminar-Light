@@ -1,3 +1,4 @@
+
 import React, { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
@@ -9,7 +10,7 @@ const GameCanvas: React.FC<GameCanvasProps> = (props) => {
     <Canvas
       camera={{ position: [0, 0, 15], fov: 45 }}
       dpr={[1, 2]} // Handle high DPI screens
-      gl={{ antialias: false, alpha: false, powerPreference: "high-performance" }}
+      gl={{ antialias: false, alpha: true, powerPreference: "high-performance" }}
     >
       <color attach="background" args={[props.theme.colors.background1]} />
       
