@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import GameCanvas from './components/GameCanvas';
-import { GameState, LevelConfig } from './types';
-import { LEVELS } from './constants';
-import { Play, RotateCcw, ArrowRight } from 'lucide-react';
+import AudioController from './components/AudioController';
+import { GameState, SandboxSettings, VibeSettings, AudioControls } from './types';
+import { getLevel, THEMES, COMPLETION_MESSAGES } from './constants';
+import { Play, RotateCcw, ArrowRight, Zap, Move, Palette, Maximize, Infinity as InfinityIcon, Clock, Eye, Headphones, ChevronLeft, ChevronRight, FastForward } from 'lucide-react';
 
 const App: React.FC = () => {
   const [levelIndex, setLevelIndex] = useState(0);
@@ -13,10 +15,43 @@ const App: React.FC = () => {
     isPlaying: false,
   });
 
-  const currentLevelConfig = LEVELS[levelIndex];
+  const [sandbox, setSandbox] = useState<SandboxSettings>({
+    gravityMult: 1,
+    speedMult: 1,
+    timeScale: 1,
+    rainbowMode: false,
+    giantMode: false,
+    infiniteAmmo: false,
+  });
+
+  const [vibe, setVibe] = useState<VibeSettings>({
+      themeId: 'cosmic',
+      musicId: 'pulse', 
+      tempo: 1.0
+  });
+
+  const [isMenuOpen, setIsMenuOpen] = useState(true);
+  const [resetKey, setResetKey] = useState(0);
+  const audioRef = useRef<AudioControls | null>(null);
+  const [fuel, setFuel] = useState(100); 
+  const [completionMsg, setCompletionMsg] = useState("");
+
+  const currentLevelConfig = useMemo(() => getLevel(levelIndex), [levelIndex]);
+  const currentTheme = THEMES[vibe.themeId];
+
+  useEffect(() => {
+    if (currentLevelConfig.particleBudget) {
+        setFuel(currentLevelConfig.particleBudget);
+    } else {
+        setFuel(100); 
+    }
+  }, [currentLevelConfig]);
 
   const handleLevelComplete = () => {
     setGameState(prev => ({ ...prev, isLevelComplete: true }));
+    const msg = COMPLETION_MESSAGES[Math.floor(Math.random() * COMPLETION_MESSAGES.length)];
+    setCompletionMsg(msg);
+    if (audioRef.current) audioRef.current.playLevelComplete();
   };
 
   const handleProgress = (count: number) => {
@@ -24,119 +59,429 @@ const App: React.FC = () => {
   };
 
   const nextLevel = () => {
-    if (levelIndex < LEVELS.length - 1) {
-      setLevelIndex(prev => prev + 1);
-      setGameState({
-        currentLevel: levelIndex + 2,
-        collectedCount: 0,
-        isLevelComplete: false,
-        isPlaying: true,
-      });
-    } else {
-      // Loop back to start or show end screen (looping for now)
-      setLevelIndex(0);
-      setGameState({
-        currentLevel: 1,
-        collectedCount: 0,
-        isLevelComplete: false,
-        isPlaying: true,
-      });
-    }
-  };
-
-  const restartLevel = () => {
-    // Force a re-mount of the canvas logic by toggling state or passing a key
+    const nextIdx = levelIndex + 1;
+    setLevelIndex(nextIdx);
     setGameState({
-      ...gameState,
+      currentLevel: nextIdx + 1,
       collectedCount: 0,
       isLevelComplete: false,
+      isPlaying: true,
     });
-    // A simple hack to reset the scene is usually key-based, handled in the return
   };
 
+  const jumpToLevel = (idx: number) => {
+    setLevelIndex(idx);
+    setGameState({
+        currentLevel: idx + 1,
+        collectedCount: 0,
+        isLevelComplete: false,
+        isPlaying: true,
+    });
+  }
+
+  const restartLevel = () => {
+    setGameState(prev => ({
+      ...prev,
+      collectedCount: 0,
+      isLevelComplete: false,
+    }));
+    if (currentLevelConfig.particleBudget) {
+        setFuel(currentLevelConfig.particleBudget);
+    }
+    setResetKey(prev => prev + 1);
+  };
+
+  const toggleSandbox = (key: keyof SandboxSettings) => {
+      setSandbox(prev => {
+          if (key === 'gravityMult') return { ...prev, gravityMult: prev.gravityMult === 1 ? 2.5 : 1 };
+          if (key === 'speedMult') return { ...prev, speedMult: prev.speedMult === 1 ? 2 : 1 };
+          if (key === 'timeScale') return prev; 
+          return { ...prev, [key]: !prev[key] };
+      });
+  };
+
+  const setTimeScale = (val: number) => {
+      setSandbox(prev => ({ ...prev, timeScale: val }));
+  }
+
+  const setTempo = (val: number) => {
+      setVibe(prev => ({ ...prev, tempo: val }));
+  }
+
+  const maxFuel = currentLevelConfig.particleBudget || 100;
+  const fuelPercent = currentLevelConfig.particleBudget 
+    ? Math.max(0, (fuel / maxFuel) * 100)
+    : 100;
+
+  const getDifficultyLabel = (lvl: number) => {
+      if (currentLevelConfig.isBossLevel) return 'EXTREME';
+      if (lvl <= 4) return 'EASY';
+      if (lvl <= 9) return 'NORMAL';
+      if (lvl <= 14) return 'DIFFICULT';
+      if (lvl <= 19) return 'HARD';
+      if (lvl <= 29) return 'COMPLEX';
+      return 'CHAOS';
+  };
+
+  const difficultyLabel = getDifficultyLabel(currentLevelConfig.id);
+
   return (
-    <div className="w-full h-screen bg-black relative font-sans text-white overflow-hidden">
-      {/* 3D Scene Layer */}
-      <div className="absolute inset-0 z-0">
-        <GameCanvas 
-          key={`level-${levelIndex}-${gameState.isLevelComplete}`} // Re-mounts on level change to reset particles
-          levelConfig={currentLevelConfig}
-          onLevelComplete={handleLevelComplete}
-          onProgress={handleProgress}
-          isPaused={!gameState.isPlaying}
-        />
+    <div 
+      className="flex w-full h-screen bg-black text-white font-sans overflow-hidden select-none"
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      
+      <AudioController 
+        vibe={vibe} 
+        isPlaying={gameState.isPlaying} 
+        onAudioReady={(ctrl) => audioRef.current = ctrl} 
+      />
+
+      <div 
+        className={`relative flex-shrink-0 bg-black/90 backdrop-blur-xl border-r border-gray-800 z-20 flex flex-col transition-all duration-500 ease-in-out overflow-hidden ${isMenuOpen ? 'w-80 translate-x-0' : 'w-0 -translate-x-full opacity-0'}`}
+      >
+        <div className="p-6 flex-grow space-y-6 overflow-y-auto custom-scrollbar w-80">
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-cyan-400 tracking-wider">SYSTEM</h2>
+            </div>
+
+            <div>
+                <h3 className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">Level Select</h3>
+                <div className="grid grid-cols-5 gap-1">
+                    {Array.from({ length: 50 }, (_, i) => i).map(i => (
+                        <button 
+                            key={i}
+                            onClick={() => jumpToLevel(i)}
+                            className={`aspect-square flex items-center justify-center rounded text-[9px] transition-colors border ${
+                                levelIndex === i 
+                                ? 'bg-cyan-900/50 border-cyan-500 text-cyan-200' 
+                                : 'bg-gray-900 border-gray-800 hover:bg-gray-800 text-gray-400'
+                            }`}
+                        >
+                            {i + 1}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div>
+                <h3 className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">Status</h3>
+                <div className="text-[10px] text-gray-400 space-y-1 font-mono bg-gray-900/50 p-3 rounded border border-gray-800">
+                    <div className="flex justify-between">
+                        <span>Status:</span>
+                        <span className={gameState.isPlaying ? "text-green-400" : "text-yellow-400"}>
+                            {gameState.isPlaying ? 'ACTIVE' : 'IDLE'}
+                        </span>
+                    </div>
+                    <div className="flex justify-between">
+                        <span>Particles:</span>
+                        <span>4,000</span>
+                    </div>
+                    <div className="flex justify-between">
+                        <span>Reservoir:</span>
+                        <span className={currentLevelConfig.particleBudget ? (fuel > 0 ? "text-cyan-400" : "text-red-500") : "text-green-400"}>
+                            {currentLevelConfig.particleBudget ? `${Math.floor(fuel)} / ${currentLevelConfig.particleBudget}` : '∞'}
+                        </span>
+                    </div>
+                    <div className="flex justify-between border-t border-gray-800 pt-1 mt-1">
+                        <span>Difficulty:</span>
+                        <span className={`font-bold ${difficultyLabel === 'EXTREME' || difficultyLabel === 'HARD' ? 'text-red-400' : 'text-blue-300'}`}>
+                            {difficultyLabel}
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <h3 className="text-[10px] uppercase tracking-widest text-purple-400 mb-2 flex items-center gap-2">
+                    <Eye size={10} /> Visual Themes
+                </h3>
+                <div className="grid grid-cols-2 gap-1 mb-2">
+                    {(Object.keys(THEMES) as Array<keyof typeof THEMES>).map(key => (
+                        <button
+                            key={key}
+                            onClick={() => setVibe(prev => ({...prev, themeId: key}))}
+                            className={`px-2 py-1.5 rounded text-[10px] capitalize transition-all border text-center ${vibe.themeId === key ? 'bg-purple-900/40 border-purple-500 text-white' : 'bg-gray-900 border-gray-800 text-gray-400 hover:bg-gray-800'}`}
+                        >
+                            {THEMES[key].name}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div>
+                <h3 className="text-[10px] uppercase tracking-widest text-cyan-400 mb-2 flex items-center gap-2">
+                    <Headphones size={10} /> Soundscapes
+                </h3>
+                <div className="grid grid-cols-2 gap-1 mb-2">
+                    {[
+                        { id: 'pulse', label: 'Pulse', desc: 'Lofi' },
+                        { id: 'chill', label: 'Chill', desc: 'Jazz' },
+                        { id: 'night', label: 'Night', desc: 'Sleep' },
+                        { id: 'bit', label: 'Bit', desc: 'Retro' },
+                        { id: 'life', label: 'Life', desc: 'Nature' },
+                        { id: 'ether', label: 'Ether', desc: 'Choral' },
+                        { id: 'void', label: 'Void', desc: 'Drone' },
+                        { id: 'focus', label: 'Focus', desc: 'Minimal' },
+                        { id: 'warp', label: 'Warp', desc: 'Sci-Fi' },
+                        { id: 'piano', label: 'Piano', desc: 'Gen' },
+                    ].map((m) => (
+                        <button
+                            key={m.id}
+                            onClick={() => setVibe(prev => ({...prev, musicId: m.id}))}
+                            className={`px-2 py-1.5 rounded text-left transition-all border ${vibe.musicId === m.id ? 'bg-cyan-900/40 border-cyan-500 text-white' : 'bg-gray-900 border-gray-800 text-gray-400 hover:bg-gray-800'}`}
+                        >
+                            <div className="flex justify-between items-center">
+                                <div className="text-[9px] font-bold uppercase">{m.label}</div>
+                                <div className="text-[8px] text-gray-500">{m.desc}</div>
+                            </div>
+                        </button>
+                    ))}
+                </div>
+                
+                <div className="bg-gray-900 border border-gray-800 rounded p-1.5 flex justify-between items-center">
+                    <span className="text-[9px] text-gray-500 ml-1 uppercase">Tempo</span>
+                    <div className="flex gap-1">
+                        {[0.5, 1.0, 1.5].map(t => (
+                            <button
+                                key={t}
+                                onClick={() => setTempo(t)}
+                                className={`px-2 py-0.5 rounded text-[9px] border transition-colors ${
+                                    vibe.tempo === t
+                                    ? 'bg-cyan-700 border-cyan-500 text-white' 
+                                    : 'bg-black border-gray-700 text-gray-500 hover:bg-gray-800'
+                                }`}
+                            >
+                                {t === 0.5 ? 'Slow' : t === 1.5 ? 'Hype' : 'Norm'}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <h3 className="text-[10px] uppercase tracking-widest text-pink-500 mb-2 flex items-center gap-2">
+                    <Zap size={10} /> Sandbox Tools
+                </h3>
+                <div className="space-y-1.5">
+                        <button 
+                        onClick={() => toggleSandbox('infiniteAmmo')}
+                        className={`w-full flex items-center justify-between px-3 py-1.5 rounded text-[10px] border transition-all ${sandbox.infiniteAmmo ? 'bg-yellow-900/30 border-yellow-500 text-yellow-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                        >
+                        <span className="flex items-center gap-2"><InfinityIcon size={10} /> Infinite Source</span>
+                        <div className={`w-1.5 h-1.5 rounded-full ${sandbox.infiniteAmmo ? 'bg-yellow-500' : 'bg-gray-700'}`} />
+                        </button>
+
+                        <div className="bg-gray-900 border border-gray-800 rounded p-1.5">
+                        <div className="text-[9px] text-gray-500 mb-1 flex items-center gap-1"><Clock size={9}/> TIME DILATION</div>
+                        <div className="flex justify-between gap-0.5">
+                            {[0.1, 0.25, 0.5, 1, 2, 4].map(scale => (
+                                <button
+                                    key={scale}
+                                    onClick={() => setTimeScale(scale)}
+                                    className={`flex-1 py-0.5 text-[9px] rounded border transition-colors ${
+                                        sandbox.timeScale === scale 
+                                        ? 'bg-blue-600 border-blue-400 text-white' 
+                                        : 'bg-black border-gray-700 text-gray-500 hover:bg-gray-800'
+                                    }`}
+                                >
+                                    {scale === 0.1 ? '.1' : scale === 0.25 ? '.25' : scale}x
+                                </button>
+                            ))}
+                        </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-1.5">
+                            <button 
+                            onClick={() => toggleSandbox('gravityMult')}
+                            className={`flex items-center justify-between px-2 py-1.5 rounded text-[10px] border transition-all ${sandbox.gravityMult > 1 ? 'bg-pink-900/30 border-pink-500 text-pink-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                            >
+                            <span className="flex items-center gap-1"><Move size={10} /> Grav+</span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${sandbox.gravityMult > 1 ? 'bg-pink-500' : 'bg-gray-700'}`} />
+                            </button>
+
+                            <button 
+                            onClick={() => toggleSandbox('speedMult')}
+                            className={`flex items-center justify-between px-2 py-1.5 rounded text-[10px] border transition-all ${sandbox.speedMult > 1 ? 'bg-cyan-900/30 border-cyan-500 text-cyan-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                            >
+                            <span className="flex items-center gap-1"><Zap size={10} /> Speed+</span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${sandbox.speedMult > 1 ? 'bg-cyan-500' : 'bg-gray-700'}`} />
+                            </button>
+
+                            <button 
+                            onClick={() => toggleSandbox('rainbowMode')}
+                            className={`flex items-center justify-between px-2 py-1.5 rounded text-[10px] border transition-all ${sandbox.rainbowMode ? 'bg-purple-900/30 border-purple-500 text-purple-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                            >
+                            <span className="flex items-center gap-1"><Palette size={10} /> Color</span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${sandbox.rainbowMode ? 'bg-purple-500' : 'bg-gray-700'}`} />
+                            </button>
+
+                            <button 
+                            onClick={() => toggleSandbox('giantMode')}
+                            className={`flex items-center justify-between px-2 py-1.5 rounded text-[10px] border transition-all ${sandbox.giantMode ? 'bg-green-900/30 border-green-500 text-green-200' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                            >
+                            <span className="flex items-center gap-1"><Maximize size={10} /> Giant</span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${sandbox.giantMode ? 'bg-green-500' : 'bg-gray-700'}`} />
+                            </button>
+                        </div>
+                </div>
+            </div>
+
+        </div>
+        
+        <div className="p-4 border-t border-gray-800 text-[9px] text-gray-600">
+            LUMINA FLOW v3.0
+        </div>
       </div>
 
-      {/* UI Overlay Layer */}
-      <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-8">
-        
-        {/* Header / Stats */}
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500">
-              LUMINA FLOW
-            </h1>
-            <p className="text-cyan-200/50 text-sm">LEVEL {gameState.currentLevel}</p>
-          </div>
-          
-          <div className="text-right">
-            <div className="text-2xl font-light">
-              {Math.min(100, Math.floor((gameState.collectedCount / currentLevelConfig.requiredCount) * 100))}%
-            </div>
-            <div className="w-32 h-1 bg-gray-800 rounded-full mt-2 overflow-hidden">
-              <div 
-                className="h-full bg-cyan-400 transition-all duration-300 ease-out"
-                style={{ width: `${Math.min(100, (gameState.collectedCount / currentLevelConfig.requiredCount) * 100)}%` }}
-              />
-            </div>
-          </div>
+      <div 
+        className={`absolute z-30 top-1/2 -translate-y-1/2 transition-all duration-500 ${isMenuOpen ? 'left-80' : 'left-0'}`}
+      >
+        <button
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            className="bg-black/80 backdrop-blur border-y border-r border-gray-800 text-cyan-400 p-2 rounded-r-xl hover:bg-gray-900 hover:pr-4 transition-all shadow-xl group flex items-center gap-2"
+        >
+            {isMenuOpen ? <ChevronLeft size={24} /> : (
+                <>
+                 <ChevronRight size={24} />
+                 <span className="text-xs font-bold tracking-widest hidden group-hover:block pr-2">SHOW MENU</span>
+                </>
+            )}
+        </button>
+      </div>
+
+      <div className="flex-grow relative h-full">
+        <div className="absolute inset-0 z-0">
+            <GameCanvas 
+            levelConfig={currentLevelConfig}
+            onLevelComplete={handleLevelComplete}
+            onProgress={handleProgress}
+            isPaused={!gameState.isPlaying}
+            sandboxSettings={sandbox}
+            setFuel={setFuel}
+            theme={currentTheme}
+            audioControls={audioRef.current}
+            resetKey={resetKey}
+            />
         </div>
 
-        {/* Center Messages */}
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          {!gameState.isPlaying && !gameState.isLevelComplete && (
-            <div className="bg-black/40 backdrop-blur-md border border-cyan-500/30 p-8 rounded-2xl text-center pointer-events-auto shadow-2xl shadow-cyan-900/20">
-              <h2 className="text-2xl mb-4 font-light">Welcome to the Void</h2>
-              <p className="text-gray-300 mb-6 max-w-md">
-                Draw paths with your cursor or finger to guide the swarm from the Source to the Planet.
-              </p>
-              <button 
-                onClick={() => setGameState(prev => ({ ...prev, isPlaying: true }))}
-                className="group flex items-center justify-center gap-2 mx-auto px-8 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-full transition-all hover:scale-105 font-medium"
-              >
-                <Play size={20} fill="currentColor" />
-                Begin
-              </button>
-            </div>
-          )}
+        <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-10">
+            
+            <div className={`flex justify-between items-start pointer-events-none select-none pl-4 transition-all duration-500 ${isMenuOpen ? 'ml-0' : 'ml-8'}`}>
+                <div>
+                    <h1 className="text-8xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500 mb-0 drop-shadow-[0_0_15px_rgba(34,211,238,0.3)]"
+                        style={{ backgroundImage: `linear-gradient(to right, ${currentTheme.colors.primary}, ${currentTheme.colors.secondary})`}}
+                    >
+                    LUMINA
+                    </h1>
+                    <div className="flex items-center gap-4 mt-2">
+                        <span className="text-6xl font-thin text-white tracking-widest">
+                            LEVEL {currentLevelConfig.id}
+                        </span>
+                        {currentLevelConfig.isBossLevel && (
+                            <span className="text-sm bg-red-600 text-white font-bold px-3 py-1 rounded animate-pulse shadow-[0_0_15px_rgba(220,38,38,0.5)]">
+                                BOSS ZONE
+                            </span>
+                        )}
+                    </div>
+                </div>
+            
+                <div className="text-right pt-4 flex flex-col gap-6">
+                    <div>
+                        <div className="text-4xl font-thin font-mono text-cyan-100">
+                        {Math.min(100, Math.floor((gameState.collectedCount / currentLevelConfig.requiredCount) * 100))}%
+                        </div>
+                        <div className="w-64 h-2 bg-gray-800 rounded-full mt-3 overflow-hidden backdrop-blur-sm border border-gray-700">
+                        <div 
+                            className={`h-full transition-all duration-300 ease-out shadow-[0_0_10px_rgba(34,211,238,0.8)] ${currentLevelConfig.isBossLevel ? 'bg-red-500' : 'bg-cyan-400'}`}
+                            style={{ 
+                                width: `${Math.min(100, (gameState.collectedCount / currentLevelConfig.requiredCount) * 100)}%`,
+                                backgroundColor: currentTheme.colors.primary
+                            }}
+                        />
+                        </div>
+                        <div className="text-[10px] text-cyan-500/70 mt-1 uppercase tracking-wider text-right">Target Completion</div>
+                    </div>
 
-          {gameState.isLevelComplete && (
-            <div className="bg-black/60 backdrop-blur-lg border border-green-500/30 p-8 rounded-2xl text-center pointer-events-auto animate-in fade-in zoom-in duration-300">
-              <h2 className="text-3xl mb-2 font-bold text-green-400">Harmony Achieved</h2>
-              <p className="text-gray-400 mb-6">The swarm has found its home.</p>
-              <button 
-                onClick={nextLevel}
-                className="flex items-center justify-center gap-2 mx-auto px-8 py-3 bg-white text-black hover:bg-gray-200 rounded-full transition-all hover:scale-105 font-bold"
-              >
-                Next Level
-                <ArrowRight size={20} />
-              </button>
+                    {currentLevelConfig.particleBudget && !sandbox.infiniteAmmo && (
+                        <div>
+                            <div className={`text-4xl font-thin font-mono ${fuelPercent < 20 ? 'text-red-400 animate-pulse' : 'text-yellow-100'}`}>
+                            {Math.ceil(fuelPercent)}%
+                            </div>
+                            <div className="w-64 h-2 bg-gray-800 rounded-full mt-3 overflow-hidden backdrop-blur-sm border border-gray-700">
+                            <div 
+                                className={`h-full transition-all duration-300 ease-out shadow-[0_0_10px_rgba(250,204,21,0.5)] ${fuelPercent < 20 ? 'bg-red-500' : 'bg-yellow-400'}`}
+                                style={{ width: `${fuelPercent}%` }}
+                            />
+                            </div>
+                            <div className="text-[10px] text-yellow-500/70 mt-1 uppercase tracking-wider text-right">Emitter Reserves</div>
+                        </div>
+                    )}
+                </div>
             </div>
-          )}
-        </div>
 
-        {/* Footer Controls */}
-        <div className="flex justify-between items-end pointer-events-auto">
-          <div className="text-xs text-gray-600 max-w-xs">
-            Performance: 3000 Instanced Particles via R3F
-          </div>
-          <button 
-            onClick={restartLevel}
-            className="p-3 rounded-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-colors"
-            title="Restart Level"
-          >
-            <RotateCcw size={20} />
-          </button>
+            <div className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-500 ${isMenuOpen ? 'ml-72' : 'ml-0'}`}>
+            {!gameState.isPlaying && !gameState.isLevelComplete && (
+                <div className="bg-black/40 backdrop-blur-md border border-cyan-500/30 p-12 rounded-3xl text-center pointer-events-auto shadow-2xl shadow-cyan-900/20 max-w-xl select-none">
+                <h2 className="text-4xl mb-6 font-light text-cyan-100">Initialize Sequence</h2>
+                <p className="text-gray-300 mb-6 text-lg leading-relaxed">
+                    Guide the aging swarm to the target. <br/>
+                    <span className="text-cyan-400 font-bold" style={{color: currentTheme.colors.primary}}>Draw paths</span> to direct the flow.
+                </p>
+                {currentLevelConfig.particleBudget && (
+                    <div className="bg-yellow-900/20 border border-yellow-500/30 p-4 rounded-xl mb-8">
+                         <p className="text-yellow-200 text-sm">
+                            <span className="font-bold">WARNING:</span> Limited Particle Reserves.<br/>
+                            Swarm emits automatically. Don't waste it.
+                         </p>
+                    </div>
+                )}
+                <button 
+                    onClick={() => setGameState(prev => ({ ...prev, isPlaying: true }))}
+                    className="group flex items-center justify-center gap-3 mx-auto px-12 py-5 bg-cyan-600 hover:bg-cyan-500 rounded-full transition-all hover:scale-105 font-bold tracking-wide shadow-lg shadow-cyan-900/50 text-lg"
+                    style={{ backgroundColor: currentTheme.colors.primary, boxShadow: `0 10px 30px ${currentTheme.colors.primary}50` }}
+                >
+                    <Play size={28} fill="currentColor" />
+                    BEGIN SIMULATION
+                </button>
+                </div>
+            )}
+
+            {gameState.isLevelComplete && (
+                <div className="bg-black/60 backdrop-blur-lg border border-green-500/30 p-12 rounded-3xl text-center pointer-events-auto animate-in fade-in zoom-in duration-300 max-w-xl select-none">
+                <h2 className="text-5xl mb-4 font-bold text-green-400" style={{color: currentTheme.colors.primary}}>Harmony Achieved</h2>
+                <p className="text-gray-300 mb-10 text-xl font-light italic">"{completionMsg}"</p>
+                <button 
+                    onClick={nextLevel}
+                    className="flex items-center justify-center gap-3 mx-auto px-12 py-5 bg-white text-black hover:bg-gray-200 rounded-full transition-all hover:scale-105 font-bold shadow-[0_0_30px_rgba(255,255,255,0.4)] text-lg"
+                >
+                    Next Level
+                    <ArrowRight size={28} />
+                </button>
+                </div>
+            )}
+            </div>
+
+            <div className={`flex justify-end items-end pointer-events-none pl-4 transition-all duration-500 ${isMenuOpen ? 'mr-0' : 'mr-4'}`}>
+                <div className="flex gap-2 pointer-events-auto">
+                    <button 
+                        onClick={nextLevel}
+                        className="flex items-center gap-2 px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-transparent hover:border-gray-700"
+                        title="Skip Level"
+                    >
+                        <FastForward size={20} />
+                        <span className="text-sm font-medium uppercase tracking-wider">Skip</span>
+                    </button>
+                    <button 
+                        onClick={restartLevel}
+                        className="flex items-center gap-2 px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-transparent hover:border-gray-700"
+                        title="Restart Level"
+                    >
+                        <RotateCcw size={20} />
+                        <span className="text-sm font-medium uppercase tracking-wider">Reset</span>
+                    </button>
+                </div>
+            </div>
         </div>
       </div>
     </div>

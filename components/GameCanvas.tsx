@@ -1,37 +1,20 @@
 import React, { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
-import { LevelConfig } from '../types';
+import { GameCanvasProps } from '../types';
 import SceneManager from './SceneManager';
 
-interface GameCanvasProps {
-  levelConfig: LevelConfig;
-  onLevelComplete: () => void;
-  onProgress: (count: number) => void;
-  isPaused: boolean;
-}
-
-const GameCanvas: React.FC<GameCanvasProps> = ({ 
-  levelConfig, 
-  onLevelComplete, 
-  onProgress,
-  isPaused 
-}) => {
+const GameCanvas: React.FC<GameCanvasProps> = (props) => {
   return (
     <Canvas
       camera={{ position: [0, 0, 15], fov: 45 }}
       dpr={[1, 2]} // Handle high DPI screens
       gl={{ antialias: false, alpha: false, powerPreference: "high-performance" }}
     >
-      <color attach="background" args={['#020205']} />
+      <color attach="background" args={[props.theme.colors.background1]} />
       
       <Suspense fallback={null}>
-        <SceneManager 
-          levelConfig={levelConfig} 
-          onLevelComplete={onLevelComplete}
-          onProgress={onProgress}
-          isPaused={isPaused}
-        />
+        <SceneManager {...props} />
         
         <EffectComposer disableNormalPass>
           {/* High intensity bloom for the "bioluminescent" look */}
