@@ -1,11 +1,9 @@
+
 # Lumina Flow
 
 **Lumina Flow** is a meditative, bioluminescent particle puzzle game built for the web. Inspired by titles like *Frost* and *Blek*, it tasks players with guiding a swarm of autonomous agents through complex cosmic puzzles using drawn paths, gravity manipulation, and flow mechanics.
 
 This project is a technical demonstration of high-performance 3D graphics in the browser using **React**, **Three.js**, and **WebGL shaders**.
-
-# Play NOW
-https://games.truejust.org/
 
 ---
 
@@ -26,7 +24,7 @@ https://games.truejust.org/
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/unlimitedinfinit/lumina-flow.git
+    git clone https://github.com/your-username/lumina-flow.git
     cd lumina-flow
     ```
 
@@ -47,12 +45,12 @@ https://games.truejust.org/
 
 ## 🧠 Architecture & Educational Guide
 
-This project is designed to handle **4,000+ interactive particles** at 60 FPS. To achieve this, we bypass standard React state updates for the render loop.
+This project is designed to handle **9,000+ interactive particles** at 60 FPS. To achieve this, we bypass standard React state updates for the render loop.
 
 ### 1. The Physics Engine (`Swarm.tsx`)
-Instead of creating 4,000 `<Mesh>` components (which would crash the browser), we use **`InstancedMesh`**.
+Instead of creating 9,000 `<Mesh>` components (which would crash the browser), we use **`InstancedMesh`**.
 
-*   **InstancedMesh:** Draws the same geometry 4,000 times in a single GPU draw call.
+*   **InstancedMesh:** Draws the same geometry 9,000 times in a single GPU draw call.
 *   **Direct Mutation:** We do not use `useState` for particle positions. Instead, we maintain `Float32Array` buffers for:
     *   `positions` (x, y, z)
     *   `velocities` (vx, vy, vz)
@@ -61,7 +59,7 @@ Instead of creating 4,000 `<Mesh>` components (which would crash the browser), w
 *   **useFrame Loop:** Inside the `useFrame` hook, we iterate through these arrays, apply physics math, and update the `InstancedMesh` matrix directly.
 
 **Forces applied per frame:**
-1.  **Flow:** Attraction towards the user-drawn paths.
+1.  **Flow:** Attraction towards the user-drawn paths (Cosmic Tubes).
 2.  **Gravity:** Slight pull towards the bottom (or towards Titans/Black Holes).
 3.  **Noise:** Perlin-like noise to create organic "swarming" jitter.
 4.  **Collision:** Ray-circle intersection for walls, obstacles, and black holes.

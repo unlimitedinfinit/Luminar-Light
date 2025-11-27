@@ -11,7 +11,7 @@ import { SceneManagerProps, AnomalyData, ThemeConfig } from '../types';
 import { CRITICAL_MASS_THRESHOLD } from '../constants';
 
 // Custom component for the glowing wormhole path
-const CosmicPath = ({ points, theme }: { points: Vector3[], theme: ThemeConfig }) => {
+const CosmicPath: React.FC<{ points: Vector3[], theme: ThemeConfig }> = ({ points, theme }) => {
     const curve = useMemo(() => {
         if (points.length < 2) return null;
         return new CatmullRomCurve3(points, false, 'catmullrom', 0.5);

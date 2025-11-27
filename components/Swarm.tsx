@@ -1,7 +1,7 @@
 
 import React, { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { InstancedMesh, Object3D, Vector3, DynamicDrawUsage, Color } from 'three';
+import { InstancedMesh, Object3D, Vector3, DynamicDrawUsage, Color, CanvasTexture, AdditiveBlending } from 'three';
 import { 
   PARTICLE_COUNT, 
   FRICTION, 
@@ -10,7 +10,8 @@ import {
   PATH_FLOW_FORCE, 
   GRAVITY_STRENGTH,
   ARENA_BOUNDS,
-  getObstaclePos
+  getObstaclePos,
+  CRITICAL_MASS_THRESHOLD
 } from '../constants';
 import { LevelConfig, AnomalyData, SandboxSettings, ThemeConfig, AudioControls } from '../types';
 
@@ -33,7 +34,7 @@ interface SwarmProps {
 }
 
 const noise = (x: number, y: number, z: number) => {
-    return Math.sin(x * 0.5 + z) * Math.cos(y * 0.5 + z);
+    return Math.sin(x * 1.5 + z) * Math.cos(y * 1.5 + z); // Increased frequency for more jitter
 };
 
 const TRAIT_NORMAL = 0;
@@ -85,8 +86,31 @@ const Swarm: React.FC<SwarmProps> = ({
   const colorStart = useMemo(() => new Color(), []);
   const colorEnd = useMemo(() => new Color(), []);
   const whiteColor = useMemo(() => new Color('#ffffff'), []);
-  const chargedColor = useMemo(() => new Color('#ffffee'), []); // Bright gold/white
+  const chargedColor = useMemo(() => new Color('#ffffee'), []);
   const destroyColor = useMemo(() => new Color('#ff4400'), []);
+
+  // SHARP TEXTURE: "Pinpoint Star" style to prevent blobbing
+  const particleTexture = useMemo(() => {
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+        const center = size / 2;
+        const gradient = ctx.createRadialGradient(center, center, 0, center, center, center);
+        
+        // Very sharp core, fast falloff
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        gradient.addColorStop(0.15, 'rgba(255, 255, 255, 0.8)'); 
+        gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.1)');
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+    }
+    return new CanvasTexture(canvas);
+  }, []);
 
   useEffect(() => {
     colorStart.set(theme.colors.particleStart);
@@ -106,7 +130,9 @@ const Swarm: React.FC<SwarmProps> = ({
     
     onProgress(0);
     onActiveCount(0);
-    if (blackHoleStateRef) blackHoleStateRef.current = [0,0,0,0,0];
+    if (blackHoleStateRef) {
+        blackHoleStateRef.current = levelConfig.obstaclePos ? new Array(levelConfig.obstaclePos.length).fill(0) : [];
+    }
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       life[i] = 0;
@@ -182,16 +208,18 @@ const Swarm: React.FC<SwarmProps> = ({
                 else if (rand > 0.80) traits[i] = TRAIT_WEAVER; 
                 else traits[i] = TRAIT_NORMAL;                 
 
-                positions[i * 3] = levelConfig.emitterPos[0] + (Math.random() - 0.5) * 0.2;
-                positions[i * 3 + 1] = levelConfig.emitterPos[1] + (Math.random() - 0.5) * 0.2;
+                const spawnAngle = Math.random() * Math.PI * 2;
+                const spawnDist = Math.random() * 0.15; 
+                positions[i * 3] = levelConfig.emitterPos[0] + Math.cos(spawnAngle) * spawnDist;
+                positions[i * 3 + 1] = levelConfig.emitterPos[1] + Math.sin(spawnAngle) * spawnDist;
                 positions[i * 3 + 2] = 0;
                 
-                let speedMult = 0.1;
-                if (traits[i] === TRAIT_SPARK) speedMult = 0.3;
+                let speedMult = 0.12;
+                if (traits[i] === TRAIT_SPARK) speedMult = 0.2;
                 if (traits[i] === TRAIT_TITAN) speedMult = 0.05;
 
-                velocities[i * 3] = (Math.random() - 0.5) * speedMult;
-                velocities[i * 3 + 1] = (Math.random() - 0.5) * speedMult;
+                velocities[i * 3] = Math.cos(spawnAngle) * speedMult;
+                velocities[i * 3 + 1] = Math.sin(spawnAngle) * speedMult;
                 
                 spawnedThisFrame++;
                 
@@ -220,18 +248,22 @@ const Swarm: React.FC<SwarmProps> = ({
 
     if (levelConfig.isBossLevel && !sandboxSettings.invincibility) {
         checkBoss = true;
-        const rotationSpeed = 0.5;
         const progressRatio = levelConfig.requiredCount > 0 ? (collectedCountRef.current / levelConfig.requiredCount) : 0;
         const speedMult = progressRatio > 0.5 ? 2.0 : 1.0;
+        const rotationSpeed = 0.5;
         
         const currentRotation = -(state.clock.elapsedTime * rotationSpeed * speedMult) % (Math.PI * 2);
-        const sectorWidth = 2.0; 
         
         bossAngleStart = currentRotation;
-        bossAngleEnd = currentRotation + sectorWidth;
         bossKillDist = 10.0; 
     }
     
+    const GLOBAL_SCALE_MODIFIER = 0.10; // Slightly reduced to prevent overlap
+
+    // --- SUB-STEPPING SETUP ---
+    const subSteps = 3;
+    const subDt = dt / subSteps;
+
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       if (life[i] <= 0 && deathTimer[i] === 0) continue;
       
@@ -244,8 +276,10 @@ const Swarm: React.FC<SwarmProps> = ({
           activeTitans.current.push(i);
       }
 
+      // HANDLE DEATH ANIMATIONS
       if (deathTimer[i] !== 0) {
           if (deathTimer[i] > 0) {
+              // EXPLOSION ANIMATION
               if (deathTimer[i] === 1.0) destroyedThisFrame++;
               deathTimer[i] -= dt * 4.0; 
               if (deathTimer[i] <= 0) {
@@ -256,7 +290,7 @@ const Swarm: React.FC<SwarmProps> = ({
                   meshRef.current.setMatrixAt(i, dummy.matrix);
                   continue;
               }
-              const scale = 1.0 + (1.0 - deathTimer[i]) * 4.0; 
+              const scale = (1.0 + (1.0 - deathTimer[i]) * 4.0) * GLOBAL_SCALE_MODIFIER; 
               dummy.position.set(positions[idx], positions[idx + 1], 0);
               dummy.rotation.z += dt * 10;
               dummy.scale.set(scale, scale, 1);
@@ -266,6 +300,7 @@ const Swarm: React.FC<SwarmProps> = ({
               continue;
           }
           else {
+              // IMPLOSION / SPAGHETTIFICATION ANIMATION
               deathTimer[i] += dt * 1.5; 
               if (deathTimer[i] >= 0) {
                   life[i] = 0;
@@ -285,7 +320,7 @@ const Swarm: React.FC<SwarmProps> = ({
               dummy.position.set(positions[idx], positions[idx + 1], 0);
               const angle = Math.atan2(velocities[idx + 1], velocities[idx]);
               dummy.rotation.z = angle;
-              dummy.scale.set(stretch, width * 0.5, 1);
+              dummy.scale.set(stretch * GLOBAL_SCALE_MODIFIER, width * 0.5 * GLOBAL_SCALE_MODIFIER, 1);
               dummy.updateMatrix();
               meshRef.current.setMatrixAt(i, dummy.matrix);
               tempColor.lerpColors(theme.colors.secondary ? new Color(theme.colors.secondary) : colorEnd, new Color('#000000'), progress);
@@ -301,7 +336,7 @@ const Swarm: React.FC<SwarmProps> = ({
 
       const trait = traits[i];
 
-      ages[i] += dt * 0.08; 
+      ages[i] += dt * 0.15; 
       if (ages[i] > 1.2) { 
         life[i] = 0;
         dummy.position.set(-9999, -9999, 0);
@@ -309,39 +344,28 @@ const Swarm: React.FC<SwarmProps> = ({
         meshRef.current.setMatrixAt(i, dummy.matrix);
         continue;
       }
-
-      // Check Chargers
-      if (levelConfig.chargers) {
-          for (const charger of levelConfig.chargers) {
-              const cdx = x - charger.position[0];
-              const cdy = y - charger.position[1];
-              const distSq = cdx*cdx + cdy*cdy;
-              if (distSq < charger.radius * charger.radius) {
-                  chargeState[i] = 1; // CHARGED
+      
+      // SEPARATION (Anti-Clumping)
+      // Check 4 random neighbors (Increased from 2)
+      if (trait !== TRAIT_GHOST) {
+          for(let k=0; k<4; k++) {
+              const otherIdx = Math.floor(Math.random() * PARTICLE_COUNT) * 3;
+              if (otherIdx === idx) continue;
+              const odx = x - positions[otherIdx];
+              const ody = y - positions[otherIdx+1];
+              const odistSq = odx*odx + ody*ody;
+              if (odistSq < 0.04 && odistSq > 0.0001) { 
+                  const odist = Math.sqrt(odistSq);
+                  const push = (0.2 - odist) * 0.35; // Stronger push
+                  vx += (odx / odist) * push;
+                  vy += (ody / odist) * push;
               }
           }
       }
 
-      // Check Boss
-      if (checkBoss) {
-          const dxTarget = x - targetPos.x;
-          const dyTarget = y - targetPos.y;
-          const distToTarget = Math.sqrt(dxTarget * dxTarget + dyTarget * dyTarget);
-          if (distToTarget < bossKillDist && distToTarget > 1.6) {
-               const cosR = Math.cos(-bossAngleStart);
-               const sinR = Math.sin(-bossAngleStart);
-               const localX = dxTarget * cosR - dyTarget * sinR;
-               const localY = dxTarget * sinR + dyTarget * cosR;
-               const localAngle = Math.atan2(localY, localX);
-               if (localAngle > 0 && localAngle < 2.0) {
-                    deathTimer[i] = 1.0; 
-                    continue;
-               }
-          }
-      }
-      
+      // --- FORCES CALCULATION ---
       const weight = Math.max(0.2, 1.0 - (ages[i] * 0.6));
-      const chaosAmount = trait === TRAIT_ROGUE ? 0.03 : 0.002;
+      const chaosAmount = trait === TRAIT_ROGUE ? 0.04 : 0.005; // More chaos
       vx += (Math.random() - 0.5) * chaosAmount;
       vy += (Math.random() - 0.5) * chaosAmount;
 
@@ -350,87 +374,8 @@ const Swarm: React.FC<SwarmProps> = ({
         const n1 = noise(x, y, noiseTime * 0.5);
         const n2 = noise(x + 10, y + 10, noiseTime * 0.3);
         const noiseDir = (trait === TRAIT_ROGUE && Math.random() > 0.9) ? -1 : 1;
-        vx += (n1 + n2) * 0.005 * weight * noiseDir;
-        vy += (n1 - n2) * 0.005 * weight * noiseDir;
-      }
-
-      // Titan Gravity
-      if (trait !== TRAIT_TITAN && activeTitans.current.length > 0) {
-          let closestTitanDistSq = 999;
-          let tx = 0, ty = 0;
-          for (const tid of activeTitans.current) {
-               const tIdx = tid * 3;
-               const tdx = positions[tIdx] - x;
-               const tdy = positions[tIdx+1] - y;
-               const distSq = tdx*tdx + tdy*tdy;
-               if (distSq < 4.0 && distSq < closestTitanDistSq) {
-                    closestTitanDistSq = distSq;
-                    tx = tdx;
-                    ty = tdy;
-               }
-          }
-          if (closestTitanDistSq < 4.0) {
-               const dist = Math.sqrt(closestTitanDistSq);
-               vx += (tx / dist) * 0.01;
-               vy += (ty / dist) * 0.01;
-          }
-      }
-
-      if (sandboxSettings.mouseAttractor && isDrawingRef.current) {
-          const mx = mousePos.current.x;
-          const my = mousePos.current.y;
-          const mdx = mx - x;
-          const mdy = my - y;
-          const mdist = Math.sqrt(mdx*mdx + mdy*mdy) || 1;
-          const mForce = 0.5;
-          vx += (mdx / mdist) * mForce * weight;
-          vy += (mdy / mdist) * mForce * weight;
-      }
-
-      // Anomalies
-      for (const anomaly of anomalyRef.current) {
-         if (anomaly.isActive) {
-            const adx = x - anomaly.position.x;
-            const ady = y - anomaly.position.y;
-            const adistSq = adx * adx + ady * ady;
-            const interactRadius = anomaly.type === 'pulse' ? anomaly.radius : anomaly.radius * 2;
-            
-            if (adistSq < interactRadius * interactRadius) {
-                const adist = Math.sqrt(adistSq);
-                if (anomaly.type === 'void' || anomaly.type === 'hazard') {
-                    if (!sandboxSettings.invincibility) { 
-                        if (anomaly.type === 'hazard' || adistSq < 0.25) {
-                             deathTimer[i] = 1.0; 
-                             continue;
-                        }
-                        const force = 0.5 * (1 - adist / anomaly.radius);
-                        vx -= (adx / adist) * force;
-                        vy -= (ady / adist) * force;
-                        
-                        // Swirl
-                        if (anomaly.type === 'void') {
-                            const swirlX = -ady / adist;
-                            const swirlY = adx / adist;
-                            vx += swirlX * 0.5;
-                            vy += swirlY * 0.5;
-                        }
-                    }
-                } else if (anomaly.type === 'pulse') {
-                    if (!sandboxSettings.invincibility) {
-                        const force = 2.0 * (1 - adist / interactRadius);
-                        vx += (adx / adist) * force;
-                        vy += (ady / adist) * force;
-                    }
-                } else if (anomaly.type === 'spirit') {
-                    const force = 0.05;
-                    vx -= (adx / adist) * force;
-                    vy -= (ady / adist) * force;
-                } else {
-                    vx += (adx / adist) * 0.3;
-                    vy += (ady / adist) * 0.3;
-                }
-            }
-         }
+        vx += (n1 + n2) * 0.01 * weight * noiseDir; // Stronger Turbulence
+        vy += (n1 - n2) * 0.01 * weight * noiseDir;
       }
 
       if (paths.length > 0) {
@@ -439,7 +384,8 @@ const Swarm: React.FC<SwarmProps> = ({
         let globalClosestPathIdx = -1;
         let globalClosestPointIdx = -1;
 
-        for (let pathIdx = 0; pathIdx < paths.length; pathIdx++) {
+        // Loop Backwards (Newest overrides Oldest)
+        for (let pathIdx = paths.length - 1; pathIdx >= 0; pathIdx--) {
             const path = paths[pathIdx];
             if (path.length < 2) continue;
             for (let p = 0; p < path.length; p += 2) {
@@ -453,6 +399,7 @@ const Swarm: React.FC<SwarmProps> = ({
                     globalClosestPointIdx = p;
                 }
             }
+            if (globalClosestDistSq < 1.0) break; // Captured by this path
         }
 
         if (globalClosestPoint && globalClosestDistSq < 4.0) {
@@ -466,8 +413,9 @@ const Swarm: React.FC<SwarmProps> = ({
 
           vx += dx * gravityForce * 3.0 * ageGravityMult * weight * followFactor;
           vy += dy * gravityForce * 3.0 * ageGravityMult * weight * followFactor;
-          vx *= 0.9; 
-          vy *= 0.9;
+          
+          vx *= 0.98; 
+          vy *= 0.98;
 
           const path = paths[globalClosestPathIdx];
           if (globalClosestPointIdx < path.length - 2) {
@@ -475,167 +423,183 @@ const Swarm: React.FC<SwarmProps> = ({
             const dirX = nextP.x - globalClosestPoint.x;
             const dirY = nextP.y - globalClosestPoint.y;
             const len = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
-            vx += (dirX / len) * flowForce * weight * followFactor;
-            vy += (dirY / len) * flowForce * weight * followFactor;
+            
+            vx += (dirX / len) * flowForce * 2.5 * weight * followFactor;
+            vy += (dirY / len) * flowForce * 2.5 * weight * followFactor;
+
+            const currentSpeedSq = vx*vx + vy*vy;
+            if (currentSpeedSq < 0.0025) { 
+                 vx += (dirX / len) * 0.02;
+                 vy += (dirY / len) * 0.02;
+            }
           }
         }
       }
 
-      if (trait !== TRAIT_GHOST && levelConfig.obstaclePos) {
-        for (let o = 0; o < levelConfig.obstaclePos.length; o++) {
-            const basePos = levelConfig.obstaclePos[o];
-            const behavior = levelConfig.obstacleBehaviors?.[o];
-            const obsPos = getObstaclePos(basePos, behavior, state.clock.elapsedTime, o * 100);
-            
-            const type = levelConfig.obstacleTypes?.[o];
-            const dx = x - obsPos[0];
-            const dy = y - obsPos[1];
-            const distSq = dx * dx + dy * dy;
-            const rad = levelConfig.obstacleRadius || 1.0;
-            const collisionRad = rad * 0.7; 
-            
-            if (type === 'blackhole') {
-                const pullRange = rad * 2.5;
-                const killRad = rad * 0.6; 
-
-                if (distSq < pullRange * pullRange) {
-                     const dist = Math.sqrt(distSq);
-                     const swirlX = -dy / dist;
-                     const swirlY = dx / dist;
-                     const swirlForce = 0.35 * (1 - dist / pullRange);
-                     const force = 0.08 * (1 - dist / pullRange);
-                     vx -= (dx / dist) * force; 
-                     vy -= (dy / dist) * force;
-                     vx += swirlX * swirlForce;
-                     vy += swirlY * swirlForce;
-                     
-                     if (!sandboxSettings.invincibility && distSq < killRad * killRad) {
-                         deathTimer[i] = -1.0; 
-                         velocities[idx] = (dx / dist) * 2.0; 
-                         velocities[idx+1] = (dy / dist) * 2.0;
-                         if (blackHoleStateRef) blackHoleStateRef.current[o] = (blackHoleStateRef.current[o] || 0) + 1;
-                         break;
-                     }
-                }
-            } else if (type === 'pulsar') {
-                const pulseRad = rad * (1 + Math.sin(state.clock.elapsedTime * 2 + o) * 0.4);
-                if (distSq < pulseRad * pulseRad) {
-                    const dist = Math.sqrt(distSq);
-                    vx += (dx / dist) * 0.3; 
-                    vy += (dy / dist) * 0.3;
-                }
-            } else {
-                if (distSq < collisionRad * collisionRad) {
-                    if (sandboxSettings.invincibility) {
-                        // Pass through
-                    } else {
-                        deathTimer[i] = 1.0; 
-                        break; 
-                    }
-                }
-            }
-        }
+      // Check Boss (Start of frame check)
+      if (checkBoss) {
+          const dxTarget = x - targetPos.x;
+          const dyTarget = y - targetPos.y;
+          const distToTarget = Math.sqrt(dxTarget * dxTarget + dyTarget * dyTarget);
+          if (distToTarget < bossKillDist && distToTarget > 1.6) {
+               const cosR = Math.cos(-bossAngleStart);
+               const sinR = Math.sin(-bossAngleStart);
+               const localX = dxTarget * cosR - dyTarget * sinR;
+               const localY = dxTarget * sinR + dyTarget * cosR;
+               const localAngle = Math.atan2(localY, localX);
+               if (localAngle > 0 && localAngle < 1.57) { // 90 deg sector
+                    deathTimer[i] = 1.0; 
+                    continue;
+               }
+          }
       }
 
-      if (levelConfig.walls && !sandboxSettings.invincibility) {
-          for (const wall of levelConfig.walls) {
-              const wx = wall.position[0];
-              const wy = wall.position[1];
-              const halfW = wall.size[0] / 2;
-              const halfH = wall.size[1] / 2;
-              const cos = Math.cos(-wall.rotation);
-              const sin = Math.sin(-wall.rotation);
-              const dx = x - wx;
-              const dy = y - wy;
-              
-              const nextX = x + vx * dt;
-              const nextY = y + vy * dt;
-              const dxNext = nextX - wx;
-              const dyNext = nextY - wy;
+      // --- MOVEMENT SUB-STEPPING ---
+      let collided = false;
 
-              const localX = dx * cos - dy * sin;
-              const localY = dx * sin + dy * cos;
-              
-              const localXNext = dxNext * cos - dyNext * sin;
-              const localYNext = dxNext * sin + dyNext * cos;
+      for (let s = 0; s < subSteps; s++) {
+          x += vx * subDt;
+          y += vy * subDt;
 
-              const pad = 0.2; 
-              const hit = (localX > -halfW - pad && localX < halfW + pad && localY > -halfH - pad && localY < halfH + pad) ||
-                          (localXNext > -halfW - pad && localXNext < halfW + pad && localYNext > -halfH - pad && localYNext < halfH + pad);
-
-              if (hit) {
-                  if (Math.random() < 0.35) { 
-                      deathTimer[i] = 1.0; 
-                      continue;
+          // 1. Check Obstacles & Black Holes
+          if (trait !== TRAIT_GHOST && levelConfig.obstaclePos) {
+              for (let o = 0; o < levelConfig.obstaclePos.length; o++) {
+                  const basePos = levelConfig.obstaclePos[o];
+                  const behavior = levelConfig.obstacleBehaviors?.[o];
+                  const obsPos = getObstaclePos(basePos, behavior, state.clock.elapsedTime + s * subDt, o * 100);
+                  
+                  const type = levelConfig.obstacleTypes?.[o];
+                  const dx = x - obsPos[0];
+                  const dy = y - obsPos[1];
+                  const distSq = dx * dx + dy * dy;
+                  const rad = levelConfig.obstacleRadius || 1.0;
+                  
+                  // SYNC WITH VISUAL SCALE
+                  const visualRadius = type === 'blackhole' ? rad * 0.5 : rad * 0.25; 
+                  
+                  // DYNAMIC BLACK HOLE GROWTH PHYSICS
+                  let effectiveRad = visualRadius;
+                  if (type === 'blackhole' && blackHoleStateRef && blackHoleStateRef.current) {
+                      const mass = blackHoleStateRef.current[o] || 0;
+                      // Matches Visual Formula: 1.0 + (mass / 50.0) * 2.0
+                      // Base is 1.0 relative to original, so mult visualRadius
+                      const growth = 1.0 + (mass / 50.0) * 2.0; 
+                      effectiveRad *= growth;
                   }
 
-                  const distToLeft = localX - (-halfW);
-                  const distToRight = halfW - localX;
-                  const distToTop = halfH - localY;
-                  const distToBottom = localY - (-halfH);
-                  const min = Math.min(distToLeft, distToRight, distToTop, distToBottom);
+                  const collisionRad = effectiveRad * 0.9;
                   
-                  let pushX = 0; let pushY = 0; let pushDist = 0;
-                  if (min === distToLeft) { pushX = -1; pushDist = distToLeft + 0.05; }
-                  else if (min === distToRight) { pushX = 1; pushDist = distToRight + 0.05; }
-                  else if (min === distToBottom) { pushY = -1; pushDist = distToBottom + 0.05; }
-                  else { pushY = 1; pushDist = distToTop + 0.05; }
-
-                  const lXNew = localX + pushX * pushDist;
-                  const lYNew = localY + pushY * pushDist;
-                  const wXNew = lXNew * Math.cos(wall.rotation) - lYNew * Math.sin(wall.rotation) + wx;
-                  const wYNew = lXNew * Math.sin(wall.rotation) + lYNew * Math.cos(wall.rotation) + wy;
-                  
-                  positions[idx] = wXNew;
-                  positions[idx + 1] = wYNew;
-
-                  const worldNormX = pushX * Math.cos(wall.rotation) - pushY * Math.sin(wall.rotation);
-                  const worldNormY = pushX * Math.sin(wall.rotation) + pushY * Math.cos(wall.rotation);
-                  const dot = vx * worldNormX + vy * worldNormY;
-                  vx = vx - 2 * dot * worldNormX;
-                  vy = vy - 2 * dot * worldNormY;
-                  vx *= 0.5; 
-                  vy *= 0.5;
+                  if (type === 'blackhole') {
+                      const pullRange = effectiveRad * 10.0; 
+                      
+                      // Event Horizon (Capture)
+                      if (distSq < collisionRad * collisionRad) {
+                          if (sandboxSettings.invincibility) {
+                              // Safe
+                          } else {
+                              deathTimer[i] = -1.0; // Trigger Capture Animation
+                              velocities[idx] = (dx / Math.sqrt(distSq)) * 2.0; 
+                              velocities[idx+1] = (dy / Math.sqrt(distSq)) * 2.0;
+                              // INCREMENT MASS
+                              if (blackHoleStateRef && blackHoleStateRef.current && blackHoleStateRef.current[o] !== undefined) {
+                                  blackHoleStateRef.current[o]++;
+                              }
+                              collided = true;
+                              break;
+                          }
+                      }
+                      
+                      // Gravity
+                      if (distSq < pullRange * pullRange) {
+                          const dist = Math.sqrt(distSq);
+                          const swirlX = -dy / dist;
+                          const swirlY = dx / dist;
+                          const swirlForce = 0.8 * (1 - dist / pullRange); // Stronger swirl
+                          const force = 0.3 * (1 - dist / pullRange);
+                          vx -= (dx / dist) * force; 
+                          vy -= (dy / dist) * force;
+                          vx += swirlX * swirlForce;
+                          vy += swirlY * swirlForce;
+                      }
+                  } else {
+                      if (distSq < collisionRad * collisionRad) {
+                          if (!sandboxSettings.invincibility) {
+                              deathTimer[i] = 1.0; 
+                              collided = true;
+                              break; 
+                          }
+                      }
+                  }
               }
           }
-      }
+          if (collided) break;
 
-      if (levelConfig.portals && teleportTimer[i] <= 0) {
-          for (const portal of levelConfig.portals) {
-              const dx = x - portal.position[0];
-              const dy = y - portal.position[1];
-              if (dx * dx + dy * dy < 1.0) { 
-                  positions[idx] = portal.target[0];
-                  positions[idx + 1] = portal.target[1];
+          // 2. Check Walls (Anti-Tunneling with HARD PUSH OUT)
+          if (levelConfig.walls && !sandboxSettings.invincibility) {
+              for (const wall of levelConfig.walls) {
+                  const wx = wall.position[0];
+                  const wy = wall.position[1];
+                  const halfW = wall.size[0] / 2;
+                  const halfH = wall.size[1] / 2;
+                  const cos = Math.cos(-wall.rotation);
+                  const sin = Math.sin(-wall.rotation);
                   
-                  const speed = Math.sqrt(vx*vx + vy*vy) || 0.1;
-                  const dirX = vx / speed; 
-                  const dirY = vy / speed;
-                  positions[idx] += dirX * 1.5;
-                  positions[idx + 1] += dirY * 1.5;
+                  const dx = x - wx;
+                  const dy = y - wy;
+                  const localX = dx * cos - dy * sin;
+                  const localY = dx * sin + dy * cos;
+                  
+                  const pad = 0.15; 
+                  
+                  if (localX > -halfW - pad && localX < halfW + pad && localY > -halfH - pad && localY < halfH + pad) {
+                      
+                      if (Math.random() < 0.1) { 
+                          deathTimer[i] = 1.0; 
+                          collided = true;
+                          break;
+                      }
 
-                  teleportTimer[i] = 1.0; 
+                      const distToLeft = localX - (-halfW);
+                      const distToRight = halfW - localX;
+                      const distToTop = halfH - localY;
+                      const distToBottom = localY - (-halfH);
+                      const min = Math.min(distToLeft, distToRight, distToTop, distToBottom);
+                      
+                      let pushX = 0; let pushY = 0; let pushDist = 0;
+                      if (min === distToLeft) { pushX = -1; pushDist = distToLeft + 0.05; }
+                      else if (min === distToRight) { pushX = 1; pushDist = distToRight + 0.05; }
+                      else if (min === distToBottom) { pushY = -1; pushDist = distToBottom + 0.05; }
+                      else { pushY = 1; pushDist = distToTop + 0.05; }
+
+                      const lXNew = localX + pushX * pushDist;
+                      const lYNew = localY + pushY * pushDist;
+                      
+                      const wXNew = lXNew * Math.cos(wall.rotation) - lYNew * Math.sin(wall.rotation) + wx;
+                      const wYNew = lXNew * Math.sin(wall.rotation) + lYNew * Math.cos(wall.rotation) + wy;
+                      
+                      x = wXNew;
+                      y = wYNew;
+
+                      const worldNormX = pushX * Math.cos(wall.rotation) - pushY * Math.sin(wall.rotation);
+                      const worldNormY = pushX * Math.sin(wall.rotation) + pushY * Math.cos(wall.rotation);
+                      
+                      const dot = vx * worldNormX + vy * worldNormY;
+                      if (dot < 0) { 
+                          vx = vx - 2 * dot * worldNormX;
+                          vy = vy - 2 * dot * worldNormY;
+                          vx *= 0.6; 
+                          vy *= 0.6;
+                      }
+                  }
               }
           }
+          if (collided) break;
       }
 
-      const dxTarget = targetPos.x - x;
-      const dyTarget = targetPos.y - y;
-      const distToTargetSq = dxTarget * dxTarget + dyTarget * dyTarget;
-      
-      if (distToTargetSq < levelConfig.targetRadius * levelConfig.targetRadius) {
-        if (levelConfig.conversionRequired && chargeState[i] === 0) {
-            deathTimer[i] = 1.0;
-            continue;
-        }
+      if (collided) continue;
 
-        life[i] = 0;
-        collectedThisFrame++;
-        dummy.position.set(-9999, -9999, 0);
-        dummy.updateMatrix();
-        meshRef.current.setMatrixAt(i, dummy.matrix);
-        continue;
-      }
+      positions[idx] = x;
+      positions[idx + 1] = y;
 
       const friction = trait === TRAIT_TITAN ? 0.98 : (trait === TRAIT_GHOST ? 0.99 : FRICTION);
       vx *= friction;
@@ -644,7 +608,6 @@ const Swarm: React.FC<SwarmProps> = ({
       let effectiveMaxSpeed = baseMaxSpeed * (1.0 - (ages[i] * 0.3));
       if (ages[i] < 0.2) effectiveMaxSpeed *= 1.3; 
       if (ages[i] > 0.8) effectiveMaxSpeed *= 0.6; 
-
       if (trait === TRAIT_TITAN) effectiveMaxSpeed *= 0.6;
       if (trait === TRAIT_SPARK) effectiveMaxSpeed *= 2.2;
       if (trait === TRAIT_GHOST) effectiveMaxSpeed *= 1.2; 
@@ -659,14 +622,12 @@ const Swarm: React.FC<SwarmProps> = ({
       velocities[idx] = vx;
       velocities[idx + 1] = vy;
       
-      positions[idx] += vx * timeScale;
-      positions[idx + 1] += vy * timeScale;
-
       if (positions[idx] > ARENA_BOUNDS.x) { positions[idx] = ARENA_BOUNDS.x; velocities[idx] *= -1; }
       if (positions[idx] < -ARENA_BOUNDS.x) { positions[idx] = -ARENA_BOUNDS.x; velocities[idx] *= -1; }
       if (positions[idx + 1] > ARENA_BOUNDS.y) { positions[idx + 1] = ARENA_BOUNDS.y; velocities[idx + 1] *= -1; }
       if (positions[idx + 1] < -ARENA_BOUNDS.y) { positions[idx + 1] = -ARENA_BOUNDS.y; velocities[idx + 1] *= -1; }
       
+      // --- RENDER UPDATES ---
       let dispX = positions[idx];
       let dispY = positions[idx + 1];
 
@@ -709,11 +670,11 @@ const Swarm: React.FC<SwarmProps> = ({
           sy *= 0.8 + Math.sin(state.clock.elapsedTime * 5) * 0.2;
       }
 
-      dummy.scale.set(sx * scaleMult, sy * scaleMult, 1); 
-      
+      dummy.scale.set(sx * scaleMult * GLOBAL_SCALE_MODIFIER, sy * scaleMult * GLOBAL_SCALE_MODIFIER, 1); 
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(i, dummy.matrix);
 
+      // Color Updates
       if (sandboxSettings.rainbowMode) {
           const hue = (state.clock.elapsedTime * 0.2 + (i * 0.001)) % 1;
           tempColor.setHSL(hue, 1, 0.6);
@@ -778,8 +739,14 @@ const Swarm: React.FC<SwarmProps> = ({
       args={[undefined, undefined, PARTICLE_COUNT]}
       frustumCulled={false}
     >
-      <circleGeometry args={[0.07, 6]} />
-      <meshBasicMaterial toneMapped={false} />
+      <planeGeometry args={[1, 1]} />
+      <meshBasicMaterial 
+        map={particleTexture}
+        transparent
+        depthWrite={false}
+        blending={AdditiveBlending}
+        toneMapped={false} 
+      />
     </instancedMesh>
   );
 };

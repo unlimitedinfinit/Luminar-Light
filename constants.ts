@@ -1,13 +1,13 @@
 
 import { LevelConfig, ThemeConfig, Wall, Portal, Charger } from './types';
 
-export const PARTICLE_COUNT = 4000;
+export const PARTICLE_COUNT = 4200; // Reduced from 9001 to prevent gridlock
 export const TARGET_FILL_RATE = 1;
 export const GRAVITY_STRENGTH = 0.05;
-export const PATH_FLOW_FORCE = 0.08;
+export const PATH_FLOW_FORCE = 0.18; // Slight boost to flow
 export const FRICTION = 0.96;
 export const MAX_SPEED = 0.45;
-export const EMITTER_RATE = 20; 
+export const EMITTER_RATE = 85; // Tuned down from 120 for smoother fill
 export const RANDOM_FORCE = 0.015;
 export const CRITICAL_MASS_THRESHOLD = 50;
 
@@ -26,7 +26,7 @@ export const getObstaclePos = (basePos: [number, number, number], behavior: stri
     if (!behavior || behavior === 'static') return basePos;
     
     const [x, y, z] = basePos;
-    const speed = 0.8; // Increased from 0.5 for more noticeable movement
+    const speed = 1.2; // Increased from 0.8 for more visible movement
     
     if (behavior === 'orbit') {
         const rad = 2.5;
@@ -79,15 +79,12 @@ export const getLevelConfig = (index: number): LevelConfig => {
   const chargers: Charger[] = [];
   let conversionRequired = false;
   
-  // Default radius is smaller now to accommodate more density
   let obstacleRadiusGen = 0.6 + seededRandom(seedBase + 6) * 0.4;
 
-  const puzzleType = seededRandom(seedBase + 50); // 0.0 - 1.0
+  const puzzleType = seededRandom(seedBase + 50);
 
   // --- PUZZLE ARCHETYPES ---
-  
-  // 1. CHARGER PUZZLE (Chance increases with level)
-  if (levelNum > 3 && puzzleType < 0.3) {
+  if (levelNum > 2 && puzzleType < 0.3) { 
       const midX = (ex + tx) / 2;
       const midY = (ey + ty) / 2;
       const dist = Math.hypot(tx-ex, ty-ey);
@@ -109,9 +106,7 @@ export const getLevelConfig = (index: number): LevelConfig => {
       });
       conversionRequired = true;
   }
-
-  // 2. PORTAL PUZZLE (Chance increases with level)
-  else if (levelNum > 6 && puzzleType < 0.5) {
+  else if (levelNum > 2 && puzzleType < 0.5) { 
       const midX = (ex + tx) / 2;
       const midY = (ey + ty) / 2;
       const angle = Math.atan2(ty-ey, tx-ex);
@@ -130,9 +125,7 @@ export const getLevelConfig = (index: number): LevelConfig => {
       portals.push({ id: 1, position: [px1, py1, 0], target: [px2, py2, 0], color: '#ffaa00' });
       portals.push({ id: 2, position: [px2, py2, 0], target: [px1, py1, 0], color: '#00aaff' });
   }
-
-  // 3. MINEFIELD (Debris & Black Holes)
-  else if (levelNum > 2) {
+  else if (levelNum > 1) { 
       const bhCount = 2 + Math.floor(seededRandom(seedBase + 60) * 3); 
       for(let i=0; i<bhCount; i++) {
            const t = 0.2 + seededRandom(seedBase + 61 + i) * 0.6;
@@ -142,13 +135,13 @@ export const getLevelConfig = (index: number): LevelConfig => {
            if (Math.hypot(bx-ex, by-ey) > 3 && Math.hypot(bx-tx, by-ty) > 3) {
                obstacles.push([bx, by, 0]);
                obstacleTypes.push('blackhole');
-               obstacleBehaviors.push(levelNum > 15 ? 'wander' : 'static');
+               obstacleBehaviors.push(levelNum > 8 ? 'wander' : 'static');
            }
       }
   }
 
   // --- STANDARD OBSTACLES ---
-  const extraObstacles = 2 + Math.floor(seededRandom(seedBase + 70) * 4);
+  const extraObstacles = 4 + Math.floor(seededRandom(seedBase + 70) * 4); 
   for (let i = 0; i < extraObstacles; i++) {
         const ox = (seededRandom(seedBase + 80 + i) - 0.5) * 16;
         const oy = (seededRandom(seedBase + 90 + i) - 0.5) * 8;
@@ -167,18 +160,17 @@ export const getLevelConfig = (index: number): LevelConfig => {
             obstacles.push([ox, oy, 0]);
             
             const rType = seededRandom(seedBase + 100 + i);
-            if (rType > 0.8 && levelNum > 10) obstacleTypes.push('pulsar');
+            if (rType > 0.8 && levelNum > 5) obstacleTypes.push('pulsar');
             else if (rType > 0.6) obstacleTypes.push('static');
             else obstacleTypes.push('debris'); 
 
             const rBehav = seededRandom(seedBase + 110 + i);
             if (isBoss) obstacleBehaviors.push('orbit');
-            else if (rBehav > 0.7 && levelNum > 8) obstacleBehaviors.push('patrolY');
+            else if (rBehav > 0.7 && levelNum > 4) obstacleBehaviors.push('patrolY');
             else obstacleBehaviors.push('static');
         }
   }
 
-  // Maze Walls logic for Era 1
   const generateMazeWalls = () => {
       const cols = 5;
       const rows = 3;
@@ -206,13 +198,12 @@ export const getLevelConfig = (index: number): LevelConfig => {
 
   if (era === 1) generateMazeWalls();
 
-  // Era 4 Chaos
   if (era >= 4 && portals.length === 0) {
       portals.push({ id: 3, position: [0, 3, 0], target: [0, -3, 0], color: '#ff00ff' });
       portals.push({ id: 4, position: [0, -3, 0], target: [0, 3, 0], color: '#00ffff' });
   }
 
-  const baseReq = (3000 + (index * 200)) * 0.7; 
+  const baseReq = (4200 + (index * 200)); 
   const req = Math.floor(isBoss ? baseReq * 0.8 : baseReq);
   const budget = levelNum >= 7 ? Math.floor(req * 3.5) : undefined;
 
@@ -242,12 +233,13 @@ const TUTORIAL_LEVELS: LevelConfig[] = [
     emitterPos: [-5, 0, 0],
     targetPos: [5, 0, 0],
     targetRadius: 1.2,
-    requiredCount: 2000, 
+    requiredCount: 4000, 
     particleBudget: undefined,
-    obstaclePos: [[0, 2, 0], [0, -2, 0], [-2, 0, 0]], 
-    obstacleTypes: ['debris', 'debris', 'static'],
+    obstaclePos: [[0, 3, 0], [0, -3, 0]], 
+    obstacleTypes: ['debris', 'debris'],
+    // Added central wall to force interaction
     walls: [
-        { position: [2, 0, 0], size: [0.5, 3, 1], rotation: 0 } 
+        { position: [0, 0, 0], size: [0.5, 4, 1], rotation: 0 } 
     ]
   },
   {
@@ -255,10 +247,12 @@ const TUTORIAL_LEVELS: LevelConfig[] = [
     emitterPos: [-7, -4, 0],
     targetPos: [0, 4, 0],
     targetRadius: 1.2,
-    obstaclePos: [[0, 0, 0], [2, 2, 0], [-2, 2, 0]],
-    obstacleTypes: ['blackhole', 'debris', 'debris'], 
-    obstacleRadius: 0.8, // Small black hole
-    requiredCount: 3000, 
+    obstaclePos: [[0, 0, 0], [2, -2, 0]],
+    // Added Black Holes + Debris explicitly
+    obstacleTypes: ['blackhole', 'blackhole'], 
+    obstacleBehaviors: ['static', 'static'],
+    obstacleRadius: 1.0, 
+    requiredCount: 4500, 
     particleBudget: undefined,
     walls: [
         { position: [-2, 0, 0], size: [4, 0.5, 1], rotation: Math.PI / 4 }, 
@@ -272,13 +266,17 @@ const TUTORIAL_LEVELS: LevelConfig[] = [
     targetRadius: 1.2,
     obstaclePos: [[-3.5, 0, 0], [3.5, 0, 0], [0, 0, 0]], 
     obstacleTypes: ['static', 'blackhole', 'debris'],
+    obstacleBehaviors: ['static', 'static', 'wander'],
     obstacleRadius: 1.0,
-    requiredCount: 3500, 
+    requiredCount: 5000, 
     particleBudget: undefined,
+    // Explicit Wall + Portal puzzle
     walls: [
-        { position: [0, -2, 0], size: [6, 0.5, 1], rotation: 0 }, 
-        { position: [4, 0, 0], size: [0.5, 4, 1], rotation: 0 },
-        { position: [-4, 2, 0], size: [0.5, 4, 1], rotation: 0 }
+        { position: [0, 0, 0], size: [10, 0.5, 1], rotation: 0 } 
+    ],
+    portals: [
+        { id: 1, position: [-4, -3, 0], target: [4, 3, 0], color: '#ffaa00' },
+        { id: 2, position: [4, 3, 0], target: [-4, -3, 0], color: '#00aaff' }
     ]
   },
   {
@@ -286,7 +284,7 @@ const TUTORIAL_LEVELS: LevelConfig[] = [
     emitterPos: [-6, 0, 0],
     targetPos: [6, 0, 0],
     targetRadius: 1.2,
-    requiredCount: 3000,
+    requiredCount: 4500, 
     particleBudget: undefined,
     walls: [
         { position: [0, 0, 0], size: [0.5, 6, 1], rotation: 0 } 
@@ -304,7 +302,7 @@ const TUTORIAL_LEVELS: LevelConfig[] = [
     emitterPos: [-6, 3, 0],
     targetPos: [6, -3, 0],
     targetRadius: 1.2,
-    requiredCount: 3500,
+    requiredCount: 4800, 
     particleBudget: undefined,
     walls: [
         { position: [0, 0, 0], size: [0.5, 12, 1], rotation: 0 } 
@@ -330,10 +328,10 @@ export const THEMES: Record<string, ThemeConfig> = {
     id: 'cosmic',
     name: 'Cosmic Void',
     colors: {
-      primary: '#00ffff', // Cyan
-      secondary: '#ff0088', // Magenta
-      background1: '#02010a', // Deep Purple/Black
-      background2: '#050214', // Deep Blue/Black
+      primary: '#00ffff',
+      secondary: '#ff0088',
+      background1: '#02010a',
+      background2: '#050214',
       particleStart: '#00ffff',
       particleEnd: '#ff00ff',
     }
@@ -342,10 +340,10 @@ export const THEMES: Record<string, ThemeConfig> = {
     id: 'zen',
     name: 'Zen Garden',
     colors: {
-      primary: '#00ffaa', // Spring Green
-      secondary: '#ffdd00', // Gold
-      background1: '#001a11', // Deep Green
-      background2: '#002626', // Teal Dark
+      primary: '#00ffaa', 
+      secondary: '#ffdd00', 
+      background1: '#001a11', 
+      background2: '#002626', 
       particleStart: '#ccffcc',
       particleEnd: '#00cc66',
     }
@@ -354,10 +352,10 @@ export const THEMES: Record<string, ThemeConfig> = {
     id: 'retro',
     name: 'Synthwave',
     colors: {
-      primary: '#ff00ff', // Hot Pink
-      secondary: '#00ffff', // Cyan
-      background1: '#1a001a', // Deep Purple
-      background2: '#2b002b', // Darker Purple
+      primary: '#ff00ff', 
+      secondary: '#00ffff', 
+      background1: '#1a001a', 
+      background2: '#2b002b', 
       particleStart: '#ff00cc',
       particleEnd: '#3300ff',
     }
@@ -366,10 +364,10 @@ export const THEMES: Record<string, ThemeConfig> = {
     id: 'amber',
     name: 'Solar Flare',
     colors: {
-      primary: '#ffaa00', // Orange
-      secondary: '#ff4400', // Red
-      background1: '#1a0a00', // Dark Brown
-      background2: '#2b1100', // Dark Red/Brown
+      primary: '#ffaa00', 
+      secondary: '#ff4400', 
+      background1: '#1a0a00', 
+      background2: '#2b1100', 
       particleStart: '#ffff00',
       particleEnd: '#ff0000',
     }
@@ -378,10 +376,10 @@ export const THEMES: Record<string, ThemeConfig> = {
     id: 'midnight',
     name: 'Midnight',
     colors: {
-      primary: '#aaddff', // Light Blue
-      secondary: '#ffffff', // White
-      background1: '#000000', // Black
-      background2: '#0a0a20', // Dark Navy
+      primary: '#aaddff', 
+      secondary: '#ffffff', 
+      background1: '#000000', 
+      background2: '#0a0a20', 
       particleStart: '#ffffff',
       particleEnd: '#4444ff',
     }
@@ -390,10 +388,10 @@ export const THEMES: Record<string, ThemeConfig> = {
     id: 'forest',
     name: 'Deep Forest',
     colors: {
-      primary: '#55ff55', // Lime
-      secondary: '#ffff55', // Yellow
-      background1: '#051a05', // Black Green
-      background2: '#0a220a', // Dark Green
+      primary: '#55ff55', 
+      secondary: '#ffff55', 
+      background1: '#051a05', 
+      background2: '#0a220a', 
       particleStart: '#aaffaa',
       particleEnd: '#005500',
     }

@@ -73,7 +73,7 @@ const Charger: React.FC<{ position: [number,number,number], radius: number, them
             {/* Crystal Core */}
             <mesh ref={coreRef}>
                 <octahedronGeometry args={[radius * 0.4, 0]} />
-                <meshBasicMaterial color="#ffffff" wireframe transparent opacity={0.3} />
+                <meshStandardMaterial color="#ffffff" emissive="#ffffff" emissiveIntensity={0.5} wireframe transparent opacity={0.3} />
             </mesh>
             {/* Glow Field */}
             <mesh>
@@ -149,8 +149,6 @@ const LevelElements: React.FC<LevelElementsProps> = ({ config, sandboxSettings, 
 
     // Dynamic Obstacles & Pulsars
     if (obstaclesRef.current) {
-        // Move Group itself? No, we need individual moving logic
-        // We iterate children to update positions
         obstaclesRef.current.children.forEach((child, i) => {
             const type = config.obstacleTypes?.[i];
             const basePos = config.obstaclePos?.[i] || [0,0,0];
@@ -161,25 +159,35 @@ const LevelElements: React.FC<LevelElementsProps> = ({ config, sandboxSettings, 
             child.position.set(dynamicPos[0], dynamicPos[1], dynamicPos[2]);
 
             if (type === 'blackhole') {
-                child.rotation.z -= 2.0 * dt;
+                child.rotation.z -= 4.0 * dt; // Faster spin
                 // Black Hole Growth
                 if (blackHoleStateRef && blackHoleStateRef.current && blackHoleStateRef.current[i] !== undefined) {
                     const mass = blackHoleStateRef.current[i];
-                    const baseScale = 0.6 + (mass / 50.0) * 0.5; // Reduced Base Scale significantly (was 1.0)
-                    const pulse = mass > 40 ? 1 + Math.sin(t * 20) * 0.1 : 1;
+                    // AGGRESSIVE GROWTH: 1.0 to 3.0
+                    const growthFactor = 1.0 + (mass / 50.0) * 2.0; 
+                    const baseScale = 1.2 * growthFactor; 
+                    
+                    // Danger Pulse
+                    const pulseSpeed = 1 + (mass / 10);
+                    const pulse = mass > 40 ? 1 + Math.sin(t * pulseSpeed) * 0.1 : 1;
+                    
                     child.scale.set(baseScale * pulse, baseScale * pulse, baseScale * pulse);
                     
                     // Supernova Ring Animation
                     const ring = supernovaRingRef.current[i];
                     if (ring) {
                         if (mass === 0) { 
-                             // Just reset, trigger expansion
-                             if (ring.scale.x < 10) ring.scale.addScalar(dt * 20);
+                             // Triggered Reset/Explosion
+                             // Expand rapidly
+                             if (ring.scale.x < 15) {
+                                 const expansion = dt * 40;
+                                 ring.scale.addScalar(expansion);
+                             }
                              if (!Array.isArray(ring.material)) {
-                                ring.material.opacity = Math.max(0, 1.0 - ring.scale.x / 10);
+                                ring.material.opacity = Math.max(0, 1.0 - ring.scale.x / 15);
                              }
                         } else {
-                             // Reset ring
+                             // Hide ring
                              ring.scale.set(0.1, 0.1, 0.1);
                              if (!Array.isArray(ring.material)) {
                                 ring.material.opacity = 0;
@@ -292,7 +300,7 @@ const LevelElements: React.FC<LevelElementsProps> = ({ config, sandboxSettings, 
         {/* BOSS SHOCKWAVE VISUAL - SECTOR */}
         {config.isBossLevel && (
             <mesh ref={shockwaveRef} rotation={[0,0,0]}>
-                <ringGeometry args={[0.95, 1.0, 64, 1, 0, 2.0]} /> {/* Sector */}
+                <ringGeometry args={[0.95, 1.0, 64, 1, 0, 1.57]} /> {/* Sector 90 deg */}
                 <meshBasicMaterial color="#ff0000" transparent opacity={0.5} side={2} />
             </mesh>
         )}
@@ -348,7 +356,6 @@ const LevelElements: React.FC<LevelElementsProps> = ({ config, sandboxSettings, 
                 const radius = config.obstacleRadius || 1;
 
                 if (type === 'blackhole') {
-                    // Smaller Visual Multiplier: 1.5 instead of 2.5
                     const visualScale = 1.0; 
                     return (
                         <group key={`obs-${idx}`}>
@@ -374,7 +381,7 @@ const LevelElements: React.FC<LevelElementsProps> = ({ config, sandboxSettings, 
                                     side={2}
                                 />
                             </mesh>
-                            {/* Lensing Distortion sphere placeholder */}
+                            {/* Lensing Distortion */}
                             <mesh>
                                 <sphereGeometry args={[radius * 2 * visualScale, 16, 16]} />
                                 <meshPhysicalMaterial 
@@ -385,10 +392,10 @@ const LevelElements: React.FC<LevelElementsProps> = ({ config, sandboxSettings, 
                                     transparent
                                 />
                             </mesh>
-                            {/* Supernova Ring */}
+                            {/* Supernova Expansion Ring */}
                             <mesh ref={(el) => supernovaRingRef.current[idx] = el!}>
-                                <ringGeometry args={[0.5, 0.6, 64]} />
-                                <meshBasicMaterial color="#ffffff" transparent opacity={0} />
+                                <ringGeometry args={[0.5, 0.8, 64]} />
+                                <meshBasicMaterial color="#ffffff" transparent opacity={0} side={2} />
                             </mesh>
                         </group>
                     );
@@ -398,20 +405,19 @@ const LevelElements: React.FC<LevelElementsProps> = ({ config, sandboxSettings, 
                     return (
                         <group key={`obs-${idx}`}>
                             <mesh>
-                                <octahedronGeometry args={[radius * 0.2, 0]} /> {/* SHRUNK 0.6 -> 0.2 */}
+                                <octahedronGeometry args={[radius * 0.2, 0]} /> 
                                 <meshBasicMaterial color="#ff3333" wireframe />
                             </mesh>
                             <mesh>
-                                <ringGeometry args={[radius * 0.25, radius * 0.35, 32]} /> {/* SHRUNK */}
+                                <ringGeometry args={[radius * 0.25, radius * 0.35, 32]} />
                                 <meshBasicMaterial color="#ff0000" transparent opacity={0.5} />
                             </mesh>
                         </group>
                     );
                 }
 
-                // Debris or Static
                 const isDebris = type === 'debris';
-                const finalRadius = isDebris ? 0.3 : radius * 0.25; // SHRUNK significantly (was just radius)
+                const finalRadius = isDebris ? 0.3 : radius * 0.25;
 
                 return (
                     <group key={`obs-${idx}`}>

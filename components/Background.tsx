@@ -101,7 +101,7 @@ const Background: React.FC<BackgroundProps> = ({ levelConfig, sandboxSettings, t
     x: (Math.random() - 0.5) * 40,
     y: (Math.random() - 0.5) * 30,
     z: -2 - Math.random() * 6, 
-    scale: 0.1 + Math.random() * 0.2, // SMALLER
+    scale: 0.1 + Math.random() * 0.2,
     originalScale: 0.1 + Math.random() * 0.2,
     rotationSpeedX: (Math.random() - 0.5) * 0.5,
     rotationSpeedY: (Math.random() - 0.5) * 0.5,
@@ -112,7 +112,7 @@ const Background: React.FC<BackgroundProps> = ({ levelConfig, sandboxSettings, t
     stretch: 1.0
   })));
 
-  // --- ALIEN WATCHERS ---
+  const lastMassRef = useRef<number[]>([]);
   const eyeRef = useRef<Group>(null);
   const [eyeState, setEyeState] = useState({
       active: false,
@@ -126,13 +126,13 @@ const Background: React.FC<BackgroundProps> = ({ levelConfig, sandboxSettings, t
   useFrame((state, delta) => {
     const timeScale = sandboxSettings?.timeScale || 1;
     const dt = delta * timeScale;
+    const t = state.clock.elapsedTime;
 
     if (shaderRef.current) {
-        shaderRef.current.uniforms.uTime.value = state.clock.elapsedTime * timeScale;
+        shaderRef.current.uniforms.uTime.value = t * timeScale;
     }
 
-    // Creature Logic (Eye)
-    if (state.clock.elapsedTime > 15) {
+    if (t > 15) {
         if (!eyeState.active && Math.random() < 0.002) {
             const colors = ["#ff0000", "#00ff00", "#00ffff", "#ff00ff", "#ffff00"];
             setEyeState({
@@ -194,52 +194,63 @@ const Background: React.FC<BackgroundProps> = ({ levelConfig, sandboxSettings, t
       levelConfig.obstaclePos.forEach((pos, i) => {
         if (levelConfig.obstacleTypes?.[i] === 'blackhole') {
           // Dynamic Position Calculation
-          const dynamicPos = getObstaclePos(pos, levelConfig.obstacleBehaviors?.[i], state.clock.elapsedTime, i * 100);
+          const dynamicPos = getObstaclePos(pos, levelConfig.obstacleBehaviors?.[i], t, i * 100);
           blackHoles.push({
             x: dynamicPos[0],
             y: dynamicPos[1],
-            r: (levelConfig.obstacleRadius || 1) * 2.5,
+            r: (levelConfig.obstacleRadius || 1) * 0.5, // 0.5 Scale visual radius
             id: i
           });
         }
       });
     }
 
-    // Walls
-    const walls = levelConfig?.walls || [];
-
-    // --- PHYSICS SUB-STEPPING ---
-    const subSteps = 3;
-    const subDt = dt / subSteps;
-
-    // Supernova Check
+    // Supernova Logic
     if (blackHoleStateRef && blackHoleStateRef.current) {
+        if (lastMassRef.current.length !== blackHoleStateRef.current.length) {
+            lastMassRef.current = [...blackHoleStateRef.current];
+        }
         blackHoles.forEach(bh => {
-            const mass = blackHoleStateRef.current[bh.id] || 0;
-            if (mass === 0 && Math.random() < 0.1) {
-                 // Slight turbulence if just reset
+            const currentMass = blackHoleStateRef.current![bh.id] || 0;
+            const lastMass = lastMassRef.current[bh.id] || 0;
+            if (lastMass > 40 && currentMass === 0) {
+                 let eruptedCount = 0;
+                 for (let k = 0; k < debris.current.length; k++) {
+                     const d = debris.current[k];
+                     if (!d.active || Math.random() > 0.7) {
+                         d.active = true;
+                         d.x = bh.x + (Math.random() - 0.5) * 1.0;
+                         d.y = bh.y + (Math.random() - 0.5) * 1.0;
+                         d.scale = d.originalScale * 1.5;
+                         d.type = 1; 
+                         const angle = Math.random() * Math.PI * 2;
+                         const speed = 8.0 + Math.random() * 8.0;
+                         d.driftX = Math.cos(angle) * speed;
+                         d.driftY = Math.sin(angle) * speed;
+                         eruptedCount++;
+                         if (eruptedCount > 25) break;
+                     }
+                 }
             }
+            lastMassRef.current[bh.id] = currentMass;
         });
     }
+
+    const walls = levelConfig?.walls || [];
+    const subSteps = 3;
+    const subDt = dt / subSteps;
 
     groupRef.current.children.forEach((child, i) => {
       const d = debris.current[i];
       if (!d.active) {
-          // Respawn logic
-          if (Math.random() < 0.01) {
+          if (Math.random() < 0.005) {
               d.x = (Math.random() > 0.5 ? 1 : -1) * 25;
               d.y = (Math.random() - 0.5) * 20;
               d.scale = d.originalScale;
               d.active = true;
               d.stretch = 1.0;
-              // Supernova Spawn: Occasionally spawn FROM a black hole center
-              if (blackHoles.length > 0 && Math.random() < 0.1) {
-                  const bh = blackHoles[Math.floor(Math.random() * blackHoles.length)];
-                  d.x = bh.x;
-                  d.y = bh.y;
-                  d.driftX = (Math.random() - 0.5) * 15; // Explosive speed
-                  d.driftY = (Math.random() - 0.5) * 15;
-              }
+              d.driftX = (Math.random() - 0.5) * 0.5;
+              d.driftY = (Math.random() - 0.5) * 0.5;
           }
       }
 
@@ -248,49 +259,48 @@ const Background: React.FC<BackgroundProps> = ({ levelConfig, sandboxSettings, t
           child.rotation.y += d.rotationSpeedY * dt;
           
           for (let s = 0; s < subSteps; s++) {
-              // Black hole gravity
               d.stretch = 1.0; 
               
+              // Black Hole Interaction
               for (const bh of blackHoles) {
                 const dx = d.x - bh.x;
                 const dy = d.y - bh.y;
                 const distSq = dx * dx + dy * dy;
                 
-                // Gravity Range
-                if (distSq < bh.r * bh.r * 12.0) { 
+                // Strong gravity within visual range + buffer
+                if (distSq < bh.r * bh.r * 60.0) { 
                     const dist = Math.sqrt(distSq);
                     
-                    // Strong Gravity - 10X stronger than before
-                    const gForce = 120.0 / Math.max(0.2, dist);
+                    const gForce = 80.0 / Math.max(0.5, dist);
                     
                     const pullX = -(dx / dist) * gForce;
                     const pullY = -(dy / dist) * gForce;
-                    
-                    // Vortex Swirl
                     const swirlX = -dy / dist;
                     const swirlY = dx / dist;
                     
-                    // Add Drag near black hole to catch them
-                    d.driftX *= 0.95;
-                    d.driftY *= 0.95;
+                    d.driftX *= 0.96;
+                    d.driftY *= 0.96;
 
-                    d.driftX += (pullX + swirlX * 5.0) * subDt;
-                    d.driftY += (pullY + swirlY * 5.0) * subDt;
+                    d.driftX += (pullX + swirlX * 8.0) * subDt;
+                    d.driftY += (pullY + swirlY * 8.0) * subDt;
 
-                    // Spaghettification Visual
                     if (dist < 4.0) {
-                        d.stretch = 1.0 + (4.0 - dist) * 1.5; 
+                        d.stretch = 1.0 + (4.0 - dist) * 2.0; 
                     }
 
-                    // Eat
-                    if (dist < 1.0) {
+                    // EAT DEBRIS
+                    if (dist < bh.r * 1.2) { 
                         d.active = false;
                         d.scale = 0.01; 
+                        // INCREMENT MASS
+                        if (blackHoleStateRef && blackHoleStateRef.current && blackHoleStateRef.current[bh.id] !== undefined) {
+                            blackHoleStateRef.current[bh.id]++;
+                        }
                     }
                 }
               }
 
-              // Wall Collision
+              // Wall Collision (Hard Push Out)
               for (const wall of walls) {
                   const wx = wall.position[0];
                   const wy = wall.position[1];
@@ -305,21 +315,30 @@ const Background: React.FC<BackgroundProps> = ({ levelConfig, sandboxSettings, t
                   const halfH = wall.size[1] / 2 + 0.5;
 
                   if (localX > -halfW && localX < halfW && localY > -halfH && localY < halfH) {
-                      // Hit wall
                       const distToLeft = localX - (-halfW);
                       const distToRight = halfW - localX;
                       const distToTop = halfH - localY;
                       const distToBottom = localY - (-halfH);
                       const min = Math.min(distToLeft, distToRight, distToTop, distToBottom);
                       
-                      let normX = 0; let normY = 0;
-                      if (min === distToLeft) normX = -1;
-                      else if (min === distToRight) normX = 1;
-                      else if (min === distToBottom) normY = -1;
-                      else normY = 1;
+                      let pushX = 0; let pushY = 0; let pushDist = 0;
+                      if (min === distToLeft) { pushX = -1; pushDist = distToLeft + 0.1; }
+                      else if (min === distToRight) { pushX = 1; pushDist = distToRight + 0.1; }
+                      else if (min === distToBottom) { pushY = -1; pushDist = distToBottom + 0.1; }
+                      else { pushY = 1; pushDist = distToTop + 0.1; }
 
-                      const wNormX = normX * Math.cos(wall.rotation) - normY * Math.sin(wall.rotation);
-                      const wNormY = normX * Math.sin(wall.rotation) + normY * Math.cos(wall.rotation);
+                      // HARD PUSH OUT
+                      const lXNew = localX + pushX * pushDist;
+                      const lYNew = localY + pushY * pushDist;
+                      
+                      const wXNew = lXNew * Math.cos(wall.rotation) - lYNew * Math.sin(wall.rotation) + wx;
+                      const wYNew = lXNew * Math.sin(wall.rotation) + lYNew * Math.cos(wall.rotation) + wy;
+
+                      d.x = wXNew;
+                      d.y = wYNew;
+
+                      const wNormX = pushX * Math.cos(wall.rotation) - pushY * Math.sin(wall.rotation);
+                      const wNormY = pushX * Math.sin(wall.rotation) + pushY * Math.cos(wall.rotation);
                       
                       const dot = d.driftX * wNormX + d.driftY * wNormY;
                       if (dot < 0) { 
@@ -328,10 +347,6 @@ const Background: React.FC<BackgroundProps> = ({ levelConfig, sandboxSettings, t
                           d.driftX *= 0.8; 
                           d.driftY *= 0.8;
                       }
-
-                      const push = 0.05;
-                      d.x += wNormX * push;
-                      d.y += wNormY * push;
                   }
               }
               
@@ -340,7 +355,6 @@ const Background: React.FC<BackgroundProps> = ({ levelConfig, sandboxSettings, t
           }
       }
       
-      // Screen wrap
       if (d.x > 30) d.x = -30;
       if (d.x < -30) d.x = 30;
       if (d.y > 25) d.y = -25;
@@ -350,7 +364,6 @@ const Background: React.FC<BackgroundProps> = ({ levelConfig, sandboxSettings, t
       child.position.y = d.y;
       child.scale.set(d.scale * d.stretch, d.scale * (1/d.stretch), d.scale);
       
-      // Rotate mesh to face velocity for stretch effect
       if (d.stretch > 1.1) {
           const angle = Math.atan2(d.driftY, d.driftX);
           child.rotation.z = angle;

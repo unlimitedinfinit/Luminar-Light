@@ -4,7 +4,7 @@ import GameCanvas from './components/GameCanvas';
 import AudioController from './components/AudioController';
 import { GameState, SandboxSettings, VibeSettings, AudioControls } from './types';
 import { getLevel, THEMES, COMPLETION_MESSAGES, PARTICLE_COUNT, LORE_FRAGMENTS } from './constants';
-import { Play, RotateCcw, ArrowRight, Zap, Move, Palette, Maximize, Infinity as InfinityIcon, Clock, Eye, Headphones, ChevronLeft, ChevronRight, FastForward, ChevronDown, ChevronUp, Split, Magnet, Shield, Activity, Terminal } from 'lucide-react';
+import { Play, RotateCcw, ArrowRight, Zap, Move, Palette, Maximize, Infinity as InfinityIcon, Clock, Eye, Headphones, ChevronLeft, ChevronRight, FastForward, Rewind, ChevronDown, ChevronUp, Split, Magnet, Shield, Activity, Terminal, Smartphone } from 'lucide-react';
 
 const App: React.FC = () => {
   const [levelIndex, setLevelIndex] = useState(0);
@@ -21,8 +21,8 @@ const App: React.FC = () => {
   const [sandbox, setSandbox] = useState<SandboxSettings>({
     gravityMult: 1,
     speedMult: 1,
-    timeScale: 1,
-    rainbowMode: false,
+    timeScale: 0.25, // Default speed slowed down for meditative feel
+    rainbowMode: true, // Rainbow mode enabled by default
     giantMode: false,
     infiniteAmmo: false,
     symmetry: false,
@@ -32,21 +32,40 @@ const App: React.FC = () => {
   });
 
   const [vibe, setVibe] = useState<VibeSettings>({
-      themeId: 'cosmic',
-      musicId: 'pulse', 
+      themeId: 'amber', 
+      musicId: 'chill', 
       tempo: 1.0
   });
 
-  const [isMenuOpen, setIsMenuOpen] = useState(true);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isLevelSelectOpen, setIsLevelSelectOpen] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const audioRef = useRef<AudioControls | null>(null);
   const [fuel, setFuel] = useState(100); 
   const [completionMsg, setCompletionMsg] = useState("");
   const [loreMsg, setLoreMsg] = useState("");
+  const [isPortraitMobile, setIsPortraitMobile] = useState(false);
 
   const currentLevelConfig = useMemo(() => getLevel(levelIndex), [levelIndex]);
   const currentTheme = THEMES[vibe.themeId];
+
+  useEffect(() => {
+    const checkOrientation = () => {
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+        const isPortrait = window.innerHeight > window.innerWidth;
+        setIsPortraitMobile(isMobile && isPortrait);
+        
+        // Auto-close menu on small screens initially
+        if (window.innerWidth < 768) {
+            setIsMenuOpen(false);
+        }
+    };
+
+    window.addEventListener('resize', checkOrientation);
+    checkOrientation();
+
+    return () => window.removeEventListener('resize', checkOrientation);
+  }, []);
 
   useEffect(() => {
       const msg = LORE_FRAGMENTS[Math.floor(Math.random() * LORE_FRAGMENTS.length)];
@@ -87,6 +106,21 @@ const App: React.FC = () => {
       showStartScreen: true, 
     });
     setActiveParticleCount(0);
+  };
+
+  const prevLevel = () => {
+    if (levelIndex > 0) {
+        const prevIdx = levelIndex - 1;
+        setLevelIndex(prevIdx);
+        setGameState({
+            currentLevel: prevIdx + 1,
+            collectedCount: 0,
+            isLevelComplete: false,
+            isPlaying: false,
+            showStartScreen: true,
+        });
+        setActiveParticleCount(0);
+    }
   };
 
   const jumpToLevel = (idx: number) => {
@@ -167,6 +201,21 @@ const App: React.FC = () => {
   };
   const mechanicTip = getMechanicTip();
 
+  if (isPortraitMobile) {
+      return (
+          <div className="flex w-full h-screen bg-black text-white items-center justify-center p-8 text-center flex-col z-50">
+               <Smartphone size={48} className="mb-4 text-cyan-400 animate-spin-slow" />
+               <h1 className="text-2xl font-bold mb-2 tracking-widest text-cyan-200">ORIENTATION ERROR</h1>
+               <p className="text-gray-400 font-mono text-sm max-w-xs">
+                   Lumina Flow requires landscape mode for quantum alignment.
+               </p>
+               <div className="mt-8 animate-pulse text-xs text-gray-600 font-mono">
+                   PLEASE ROTATE DEVICE
+               </div>
+          </div>
+      );
+  }
+
   return (
     <div 
       className="flex w-full h-screen bg-black text-white font-sans overflow-hidden select-none"
@@ -181,11 +230,15 @@ const App: React.FC = () => {
 
       {/* SIDEBAR */}
       <div 
-        className={`relative flex-shrink-0 bg-black/90 backdrop-blur-xl border-r border-gray-800 z-20 flex flex-col transition-all duration-500 ease-in-out overflow-hidden ${isMenuOpen ? 'w-80 translate-x-0' : 'w-0 -translate-x-full opacity-0'}`}
+        className={`relative flex-shrink-0 bg-black/90 backdrop-blur-xl border-r border-gray-800 z-20 flex flex-col transition-all duration-500 ease-in-out overflow-hidden ${isMenuOpen ? 'w-80 md:w-80 w-full translate-x-0' : 'w-0 -translate-x-full opacity-0'}`}
       >
         <div className="p-6 flex-grow space-y-6 overflow-y-auto custom-scrollbar w-80">
             <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-bold text-cyan-400 tracking-wider">SYSTEM</h2>
+                {/* Mobile Close Button */}
+                <button onClick={() => setIsMenuOpen(false)} className="md:hidden text-gray-500 hover:text-white">
+                    <ChevronLeft />
+                </button>
             </div>
 
             <div className="border-b border-gray-800 pb-4">
@@ -417,7 +470,7 @@ const App: React.FC = () => {
       </div>
 
       <div 
-        className={`absolute z-30 top-1/2 -translate-y-1/2 transition-all duration-500 ${isMenuOpen ? 'left-80' : 'left-0'}`}
+        className={`absolute z-30 bottom-40 transition-all duration-500 ${isMenuOpen ? 'left-80 md:left-80 left-0' : 'left-0'}`}
       >
         <button
             onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -426,7 +479,7 @@ const App: React.FC = () => {
             {isMenuOpen ? <ChevronLeft size={24} /> : (
                 <>
                  <ChevronRight size={24} />
-                 <span className="text-xs font-bold tracking-widest hidden group-hover:block pr-2">SHOW MENU</span>
+                 <span className="text-xs font-bold tracking-widest block pr-2">SHOW MENU</span>
                 </>
             )}
         </button>
@@ -449,38 +502,43 @@ const App: React.FC = () => {
             />
         </div>
 
-        <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-10">
+        <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between md:p-10 p-4">
             
-            <div className={`flex justify-between items-start pointer-events-none select-none pl-4 transition-all duration-500 ${isMenuOpen ? 'ml-0' : 'ml-8'}`}>
+            <div className={`flex justify-between items-start pointer-events-none select-none pl-4 transition-all duration-500 ${isMenuOpen ? 'md:ml-0 ml-0 opacity-20 md:opacity-100' : 'md:ml-8 ml-0'}`}>
                 <div>
-                    <h1 className="text-8xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500 mb-0 drop-shadow-[0_0_15px_rgba(34,211,238,0.3)]"
+                    <h1 className="md:text-8xl text-5xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500 mb-0 drop-shadow-[0_0_15px_rgba(34,211,238,0.3)]"
                         style={{ backgroundImage: `linear-gradient(to right, ${currentTheme.colors.primary}, ${currentTheme.colors.secondary})`}}
                     >
                     LUMINA
                     </h1>
                     <div className="flex items-center gap-4 mt-2">
-                        <span className="text-6xl font-thin text-white tracking-widest">
+                        <span className="md:text-6xl text-3xl font-thin text-white tracking-widest">
                             LEVEL {currentLevelConfig.id}
                         </span>
                         {currentLevelConfig.isBossLevel && (
-                            <span className="text-sm bg-red-600 text-white font-bold px-3 py-1 rounded animate-pulse shadow-[0_0_15px_rgba(220,38,38,0.5)]">
+                            <span className="text-xs md:text-sm bg-red-600 text-white font-bold px-2 md:px-3 py-1 rounded animate-pulse shadow-[0_0_15px_rgba(220,38,38,0.5)]">
                                 BOSS ZONE
                             </span>
                         )}
                         {mechanicTip && (
-                            <div className="ml-4 px-3 py-1 bg-blue-900/40 border border-blue-500 text-blue-200 text-xs font-mono tracking-wide rounded animate-pulse">
+                            <div className="ml-2 md:ml-4 px-2 md:px-3 py-1 bg-blue-900/40 border border-blue-500 text-blue-200 text-[10px] md:text-xs font-mono tracking-wide rounded animate-pulse hidden md:block">
                                 {mechanicTip}
                             </div>
                         )}
                     </div>
+                    {mechanicTip && (
+                        <div className="mt-2 px-2 py-1 bg-blue-900/40 border border-blue-500 text-blue-200 text-[10px] font-mono tracking-wide rounded animate-pulse md:hidden inline-block">
+                             {mechanicTip}
+                        </div>
+                    )}
                 </div>
             
                 <div className="text-right pt-4 flex flex-col gap-6">
                     <div>
-                        <div className="text-4xl font-thin font-mono text-cyan-100">
+                        <div className="text-2xl md:text-4xl font-thin font-mono text-cyan-100">
                         {Math.min(100, Math.floor((gameState.collectedCount / currentLevelConfig.requiredCount) * 100))}%
                         </div>
-                        <div className="w-64 h-2 bg-gray-800 rounded-full mt-3 overflow-hidden backdrop-blur-sm border border-gray-700">
+                        <div className="w-32 md:w-64 h-2 bg-gray-800 rounded-full mt-3 overflow-hidden backdrop-blur-sm border border-gray-700">
                         <div 
                             className={`h-full transition-all duration-300 ease-out shadow-[0_0_10px_rgba(34,211,238,0.8)] ${currentLevelConfig.isBossLevel ? 'bg-red-500' : 'bg-cyan-400'}`}
                             style={{ 
@@ -489,37 +547,35 @@ const App: React.FC = () => {
                             }}
                         />
                         </div>
-                        <div className="text-[10px] text-cyan-500/70 mt-1 uppercase tracking-wider text-right">Target Completion</div>
                     </div>
 
                     {currentLevelConfig.particleBudget && !sandbox.infiniteAmmo && (
                         <div>
-                            <div className={`text-4xl font-thin font-mono ${fuelPercent < 20 ? 'text-red-400 animate-pulse' : 'text-yellow-100'}`}>
+                            <div className={`text-2xl md:text-4xl font-thin font-mono ${fuelPercent < 20 ? 'text-red-400 animate-pulse' : 'text-yellow-100'}`}>
                             {Math.ceil(fuelPercent)}%
                             </div>
-                            <div className="w-64 h-2 bg-gray-800 rounded-full mt-3 overflow-hidden backdrop-blur-sm border border-gray-700">
+                            <div className="w-32 md:w-64 h-2 bg-gray-800 rounded-full mt-3 overflow-hidden backdrop-blur-sm border border-gray-700">
                             <div 
                                 className={`h-full transition-all duration-300 ease-out shadow-[0_0_10px_rgba(250,204,21,0.5)] ${fuelPercent < 20 ? 'bg-red-500' : 'bg-yellow-400'}`}
                                 style={{ width: `${fuelPercent}%` }}
                             />
                             </div>
-                            <div className="text-[10px] text-yellow-500/70 mt-1 uppercase tracking-wider text-right">Emitter Reserves</div>
                         </div>
                     )}
                     
-                     <div className="h-4 text-[10px] font-mono text-cyan-500/50 uppercase tracking-widest text-right animate-pulse">
+                     <div className="h-4 text-[10px] font-mono text-cyan-500/50 uppercase tracking-widest text-right animate-pulse hidden md:block">
                          {Math.random() > 0.995 ? "SYSTEM WATCHING" : Math.random() > 0.995 ? "ENTROPY INCREASING" : ""}
                      </div>
                 </div>
             </div>
 
-            <div className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-500 ${isMenuOpen ? 'ml-72' : 'ml-0'}`}>
+            <div className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-500 ${isMenuOpen ? 'md:ml-72 ml-0' : 'ml-0'}`}>
             
             {!gameState.isPlaying && !gameState.isLevelComplete && gameState.showStartScreen && (
-                <div className="bg-black/80 backdrop-blur-md border border-cyan-500/30 p-10 rounded-lg text-center pointer-events-auto shadow-2xl shadow-cyan-900/10 max-w-lg select-none">
+                <div className="bg-black/80 backdrop-blur-md border border-cyan-500/30 p-6 md:p-10 rounded-lg text-center pointer-events-auto shadow-2xl shadow-cyan-900/10 max-w-lg select-none mx-4">
                     <div className="text-cyan-400 mb-4 animate-pulse"><Terminal size={32} className="mx-auto" /></div>
-                    <h2 className="text-xl mb-4 font-mono text-cyan-200 tracking-widest border-b border-cyan-900 pb-2">SYSTEM INTERCEPT</h2>
-                    <p className="text-gray-300 mb-8 text-md font-mono leading-relaxed opacity-80 min-h-[60px] flex items-center justify-center">
+                    <h2 className="text-lg md:text-xl mb-4 font-mono text-cyan-200 tracking-widest border-b border-cyan-900 pb-2">SYSTEM INTERCEPT</h2>
+                    <p className="text-gray-300 mb-8 text-sm md:text-md font-mono leading-relaxed opacity-80 min-h-[60px] flex items-center justify-center">
                         "{loreMsg}"
                     </p>
                     <button 
@@ -537,13 +593,13 @@ const App: React.FC = () => {
             )}
 
             {gameState.isLevelComplete && (
-                <div className="bg-black/90 backdrop-blur-xl border border-green-500/50 p-8 rounded-sm text-center pointer-events-auto animate-in fade-in zoom-in duration-300 max-w-lg select-none shadow-[0_0_50px_rgba(34,197,94,0.2)]">
+                <div className="bg-black/90 backdrop-blur-xl border border-green-500/50 p-8 rounded-sm text-center pointer-events-auto animate-in fade-in zoom-in duration-300 max-w-lg select-none shadow-[0_0_50px_rgba(34,197,94,0.2)] mx-4">
                 <div className="border-b border-green-900/50 pb-4 mb-6">
-                    <h2 className="text-2xl font-mono text-green-500 uppercase tracking-widest mb-1">Session Report</h2>
+                    <h2 className="text-xl md:text-2xl font-mono text-green-500 uppercase tracking-widest mb-1">Session Report</h2>
                     <div className="text-[10px] text-green-700 font-mono">{new Date().toISOString()} // LOG_ID_442</div>
                 </div>
                 
-                <div className="font-mono text-green-300 mb-8 text-lg typing-effect min-h-[60px] flex items-center justify-center">
+                <div className="font-mono text-green-300 mb-8 text-sm md:text-lg typing-effect min-h-[60px] flex items-center justify-center">
                     &gt; {completionMsg}
                 </div>
 
@@ -565,23 +621,32 @@ const App: React.FC = () => {
             )}
             </div>
 
-            <div className={`flex justify-end items-end pointer-events-none pl-4 transition-all duration-500 ${isMenuOpen ? 'mr-0' : 'mr-4'}`}>
+            <div className={`flex justify-end items-end pointer-events-none pl-4 transition-all duration-500 ${isMenuOpen ? 'md:mr-0 mr-0' : 'md:mr-4 mr-0'}`}>
                 <div className="flex gap-2 pointer-events-auto">
                     <button 
+                        onClick={prevLevel}
+                        disabled={levelIndex === 0}
+                        className={`flex items-center gap-2 px-4 md:px-6 py-2 md:py-3 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-transparent hover:border-gray-700 ${levelIndex === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                        title="Previous Level"
+                    >
+                        <Rewind size={20} />
+                        <span className="text-xs md:text-sm font-medium uppercase tracking-wider hidden md:inline">Back</span>
+                    </button>
+                    <button 
                         onClick={nextLevel}
-                        className="flex items-center gap-2 px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-transparent hover:border-gray-700"
+                        className="flex items-center gap-2 px-4 md:px-6 py-2 md:py-3 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-transparent hover:border-gray-700"
                         title="Skip Level"
                     >
                         <FastForward size={20} />
-                        <span className="text-sm font-medium uppercase tracking-wider">Skip</span>
+                        <span className="text-xs md:text-sm font-medium uppercase tracking-wider hidden md:inline">Skip</span>
                     </button>
                     <button 
                         onClick={restartLevel}
-                        className="flex items-center gap-2 px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-transparent hover:border-gray-700"
+                        className="flex items-center gap-2 px-4 md:px-6 py-2 md:py-3 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all border border-transparent hover:border-gray-700"
                         title="Restart Level"
                     >
                         <RotateCcw size={20} />
-                        <span className="text-sm font-medium uppercase tracking-wider">Reset</span>
+                        <span className="text-xs md:text-sm font-medium uppercase tracking-wider hidden md:inline">Reset</span>
                     </button>
                 </div>
             </div>
