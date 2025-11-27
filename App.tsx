@@ -1,4 +1,5 @@
 
+
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import GameCanvas from './components/GameCanvas';
 import AudioController from './components/AudioController';
@@ -21,8 +22,8 @@ const App: React.FC = () => {
   const [sandbox, setSandbox] = useState<SandboxSettings>({
     gravityMult: 1,
     speedMult: 1,
-    timeScale: 0.25, // Default speed slowed down for meditative feel
-    rainbowMode: true, // Rainbow mode enabled by default
+    timeScale: 1.0, // Default speed set back to normal
+    rainbowMode: true, 
     giantMode: false,
     infiniteAmmo: false,
     symmetry: false,

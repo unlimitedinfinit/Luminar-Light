@@ -1,4 +1,6 @@
 
+
+
 import React, { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { InstancedMesh, Object3D, Vector3, DynamicDrawUsage, Color, CanvasTexture, AdditiveBlending } from 'three';
@@ -258,11 +260,14 @@ const Swarm: React.FC<SwarmProps> = ({
         bossKillDist = 10.0; 
     }
     
-    const GLOBAL_SCALE_MODIFIER = 0.10; // Slightly reduced to prevent overlap
+    const GLOBAL_SCALE_MODIFIER = 0.10; 
 
-    // --- SUB-STEPPING SETUP ---
     const subSteps = 3;
     const subDt = dt / subSteps;
+    
+    const activeAnomalies = anomalyRef.current.filter(a => a.isActive);
+    const checkMouseGrav = sandboxSettings.mouseAttractor;
+    const mousePosVec = mousePos.current;
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       if (life[i] <= 0 && deathTimer[i] === 0) continue;
@@ -276,10 +281,8 @@ const Swarm: React.FC<SwarmProps> = ({
           activeTitans.current.push(i);
       }
 
-      // HANDLE DEATH ANIMATIONS
       if (deathTimer[i] !== 0) {
           if (deathTimer[i] > 0) {
-              // EXPLOSION ANIMATION
               if (deathTimer[i] === 1.0) destroyedThisFrame++;
               deathTimer[i] -= dt * 4.0; 
               if (deathTimer[i] <= 0) {
@@ -290,17 +293,17 @@ const Swarm: React.FC<SwarmProps> = ({
                   meshRef.current.setMatrixAt(i, dummy.matrix);
                   continue;
               }
-              const scale = (1.0 + (1.0 - deathTimer[i]) * 4.0) * GLOBAL_SCALE_MODIFIER; 
+              const scale = (1.0 + (1.0 - deathTimer[i]) * 6.0) * GLOBAL_SCALE_MODIFIER; // Enhanced Explosion
               dummy.position.set(positions[idx], positions[idx + 1], 0);
               dummy.rotation.z += dt * 10;
               dummy.scale.set(scale, scale, 1);
               dummy.updateMatrix();
+              // FIX: Incorrectly called setMatrixAt with a color. Corrected to set matrix and color separately.
               meshRef.current.setMatrixAt(i, dummy.matrix);
               meshRef.current.setColorAt(i, destroyColor);
               continue;
           }
           else {
-              // IMPLOSION / SPAGHETTIFICATION ANIMATION
               deathTimer[i] += dt * 1.5; 
               if (deathTimer[i] >= 0) {
                   life[i] = 0;
@@ -314,7 +317,7 @@ const Swarm: React.FC<SwarmProps> = ({
               positions[idx + 1] += velocities[idx + 1] * dt * 5.0;
               
               const progress = 1.0 + deathTimer[i]; 
-              const stretch = 1.0 + progress * 10.0;
+              const stretch = 1.0 + progress * 15.0; // Enhanced Spaghettification
               const width = 1.0 - progress;
 
               dummy.position.set(positions[idx], positions[idx + 1], 0);
@@ -336,8 +339,9 @@ const Swarm: React.FC<SwarmProps> = ({
 
       const trait = traits[i];
 
-      ages[i] += dt * 0.15; 
-      if (ages[i] > 1.2) { 
+      // BALANCED AGING: Lifespan is generous but finite (~50 seconds)
+      ages[i] += dt * 0.02; 
+      if (ages[i] > 1.0) { 
         life[i] = 0;
         dummy.position.set(-9999, -9999, 0);
         dummy.updateMatrix();
@@ -345,10 +349,51 @@ const Swarm: React.FC<SwarmProps> = ({
         continue;
       }
       
-      // SEPARATION (Anti-Clumping)
-      // Check 4 random neighbors (Increased from 2)
+      // MOUSE GRAVITY
+      if (checkMouseGrav) {
+          const dx = mousePosVec.x - x;
+          const dy = mousePosVec.y - y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < 25) { // 5 unit radius
+              const dist = Math.sqrt(distSq);
+              const force = (1 - dist / 5) * 0.15;
+              vx += (dx / dist) * force;
+              vy += (dy / dist) * force;
+          }
+      }
+      
+      // ANOMALY FORCES
+      for (const anomaly of activeAnomalies) {
+          const dx = x - anomaly.position.x;
+          const dy = y - anomaly.position.y;
+          const distSq = dx*dx + dy*dy;
+          
+          if (distSq < anomaly.radius * anomaly.radius) {
+              if (anomaly.type === 'repulsor' || anomaly.type === 'pulse') {
+                  const dist = Math.sqrt(distSq);
+                  const force = (1 - dist / anomaly.radius) * (anomaly.type === 'pulse' ? 0.4 : 0.1);
+                  vx += (dx / dist) * force;
+                  vy += (dy / dist) * force;
+              } else if (!sandboxSettings.invincibility) {
+                  if (anomaly.type === 'hazard') {
+                      deathTimer[i] = 1.0;
+                      break; 
+                  }
+                  if (anomaly.type === 'void') {
+                      deathTimer[i] = -1.0;
+                      const dist = Math.sqrt(distSq);
+                      velocities[idx] = (dx / dist) * -2.0; 
+                      velocities[idx + 1] = (dy / dist) * -2.0;
+                      break;
+                  }
+              }
+          }
+      }
+      if(deathTimer[i] !== 0) continue;
+
+
       if (trait !== TRAIT_GHOST) {
-          for(let k=0; k<4; k++) {
+          for(let k=0; k<12; k++) {
               const otherIdx = Math.floor(Math.random() * PARTICLE_COUNT) * 3;
               if (otherIdx === idx) continue;
               const odx = x - positions[otherIdx];
@@ -356,16 +401,15 @@ const Swarm: React.FC<SwarmProps> = ({
               const odistSq = odx*odx + ody*ody;
               if (odistSq < 0.04 && odistSq > 0.0001) { 
                   const odist = Math.sqrt(odistSq);
-                  const push = (0.2 - odist) * 0.35; // Stronger push
+                  const push = (0.2 - odist) * 0.5; 
                   vx += (odx / odist) * push;
                   vy += (ody / odist) * push;
               }
           }
       }
 
-      // --- FORCES CALCULATION ---
       const weight = Math.max(0.2, 1.0 - (ages[i] * 0.6));
-      const chaosAmount = trait === TRAIT_ROGUE ? 0.04 : 0.005; // More chaos
+      const chaosAmount = trait === TRAIT_ROGUE ? 0.04 : 0.005; 
       vx += (Math.random() - 0.5) * chaosAmount;
       vy += (Math.random() - 0.5) * chaosAmount;
 
@@ -374,7 +418,7 @@ const Swarm: React.FC<SwarmProps> = ({
         const n1 = noise(x, y, noiseTime * 0.5);
         const n2 = noise(x + 10, y + 10, noiseTime * 0.3);
         const noiseDir = (trait === TRAIT_ROGUE && Math.random() > 0.9) ? -1 : 1;
-        vx += (n1 + n2) * 0.01 * weight * noiseDir; // Stronger Turbulence
+        vx += (n1 + n2) * 0.01 * weight * noiseDir; 
         vy += (n1 - n2) * 0.01 * weight * noiseDir;
       }
 
@@ -384,7 +428,6 @@ const Swarm: React.FC<SwarmProps> = ({
         let globalClosestPathIdx = -1;
         let globalClosestPointIdx = -1;
 
-        // Loop Backwards (Newest overrides Oldest)
         for (let pathIdx = paths.length - 1; pathIdx >= 0; pathIdx--) {
             const path = paths[pathIdx];
             if (path.length < 2) continue;
@@ -399,7 +442,7 @@ const Swarm: React.FC<SwarmProps> = ({
                     globalClosestPointIdx = p;
                 }
             }
-            if (globalClosestDistSq < 1.0) break; // Captured by this path
+            if (globalClosestDistSq < 1.0) break; 
         }
 
         if (globalClosestPoint && globalClosestDistSq < 4.0) {
@@ -414,8 +457,8 @@ const Swarm: React.FC<SwarmProps> = ({
           vx += dx * gravityForce * 3.0 * ageGravityMult * weight * followFactor;
           vy += dy * gravityForce * 3.0 * ageGravityMult * weight * followFactor;
           
-          vx *= 0.98; 
-          vy *= 0.98;
+          vx *= 0.99; 
+          vy *= 0.99;
 
           const path = paths[globalClosestPathIdx];
           if (globalClosestPointIdx < path.length - 2) {
@@ -429,14 +472,13 @@ const Swarm: React.FC<SwarmProps> = ({
 
             const currentSpeedSq = vx*vx + vy*vy;
             if (currentSpeedSq < 0.0025) { 
-                 vx += (dirX / len) * 0.02;
-                 vy += (dirY / len) * 0.02;
+                 vx += (dirX / len) * 0.06;
+                 vy += (dirY / len) * 0.06;
             }
           }
         }
       }
 
-      // Check Boss (Start of frame check)
       if (checkBoss) {
           const dxTarget = x - targetPos.x;
           const dyTarget = y - targetPos.y;
@@ -447,21 +489,32 @@ const Swarm: React.FC<SwarmProps> = ({
                const localX = dxTarget * cosR - dyTarget * sinR;
                const localY = dxTarget * sinR + dyTarget * cosR;
                const localAngle = Math.atan2(localY, localX);
-               if (localAngle > 0 && localAngle < 1.57) { // 90 deg sector
+               if (localAngle > 0 && localAngle < 1.57) { 
                     deathTimer[i] = 1.0; 
                     continue;
                }
           }
       }
 
-      // --- MOVEMENT SUB-STEPPING ---
       let collided = false;
 
       for (let s = 0; s < subSteps; s++) {
           x += vx * subDt;
           y += vy * subDt;
+          
+          if (levelConfig.portals && teleportTimer[i] <= 0) {
+              for (const portal of levelConfig.portals) {
+                  const dx = x - portal.position[0];
+                  const dy = y - portal.position[1];
+                  if (dx*dx + dy*dy < 1.0) {
+                      x = portal.target[0];
+                      y = portal.target[1];
+                      teleportTimer[i] = 0.5; // 0.5s cooldown
+                      break; 
+                  }
+              }
+          }
 
-          // 1. Check Obstacles & Black Holes
           if (trait !== TRAIT_GHOST && levelConfig.obstaclePos) {
               for (let o = 0; o < levelConfig.obstaclePos.length; o++) {
                   const basePos = levelConfig.obstaclePos[o];
@@ -474,15 +527,11 @@ const Swarm: React.FC<SwarmProps> = ({
                   const distSq = dx * dx + dy * dy;
                   const rad = levelConfig.obstacleRadius || 1.0;
                   
-                  // SYNC WITH VISUAL SCALE
                   const visualRadius = type === 'blackhole' ? rad * 0.5 : rad * 0.25; 
                   
-                  // DYNAMIC BLACK HOLE GROWTH PHYSICS
                   let effectiveRad = visualRadius;
                   if (type === 'blackhole' && blackHoleStateRef && blackHoleStateRef.current) {
                       const mass = blackHoleStateRef.current[o] || 0;
-                      // Matches Visual Formula: 1.0 + (mass / 50.0) * 2.0
-                      // Base is 1.0 relative to original, so mult visualRadius
                       const growth = 1.0 + (mass / 50.0) * 2.0; 
                       effectiveRad *= growth;
                   }
@@ -492,15 +541,13 @@ const Swarm: React.FC<SwarmProps> = ({
                   if (type === 'blackhole') {
                       const pullRange = effectiveRad * 10.0; 
                       
-                      // Event Horizon (Capture)
                       if (distSq < collisionRad * collisionRad) {
                           if (sandboxSettings.invincibility) {
                               // Safe
                           } else {
-                              deathTimer[i] = -1.0; // Trigger Capture Animation
+                              deathTimer[i] = -1.0; 
                               velocities[idx] = (dx / Math.sqrt(distSq)) * 2.0; 
                               velocities[idx+1] = (dy / Math.sqrt(distSq)) * 2.0;
-                              // INCREMENT MASS
                               if (blackHoleStateRef && blackHoleStateRef.current && blackHoleStateRef.current[o] !== undefined) {
                                   blackHoleStateRef.current[o]++;
                               }
@@ -509,24 +556,29 @@ const Swarm: React.FC<SwarmProps> = ({
                           }
                       }
                       
-                      // Gravity
                       if (distSq < pullRange * pullRange) {
                           const dist = Math.sqrt(distSq);
                           const swirlX = -dy / dist;
                           const swirlY = dx / dist;
-                          const swirlForce = 0.8 * (1 - dist / pullRange); // Stronger swirl
+                          const swirlForce = 0.8 * (1 - dist / pullRange); 
                           const force = 0.3 * (1 - dist / pullRange);
                           vx -= (dx / dist) * force; 
                           vy -= (dy / dist) * force;
                           vx += swirlX * swirlForce;
                           vy += swirlY * swirlForce;
                       }
-                  } else {
+                  } else if (type === 'static' || type === 'pulsar' || type === 'debris') {
                       if (distSq < collisionRad * collisionRad) {
-                          if (!sandboxSettings.invincibility) {
-                              deathTimer[i] = 1.0; 
-                              collided = true;
-                              break; 
+                          const dist = Math.sqrt(distSq);
+                          const pushOut = (collisionRad - dist);
+                          x += (dx / dist) * pushOut;
+                          y += (dy / dist) * pushOut;
+                          const dot = vx * dx + vy * dy;
+                          if (dot < 0) {
+                            vx -= (dx / dist) * (dot / dist) * 2;
+                            vy -= (dy / dist) * (dot / dist) * 2;
+                            vx *= 0.8;
+                            vy *= 0.8;
                           }
                       }
                   }
@@ -534,8 +586,7 @@ const Swarm: React.FC<SwarmProps> = ({
           }
           if (collided) break;
 
-          // 2. Check Walls (Anti-Tunneling with HARD PUSH OUT)
-          if (levelConfig.walls && !sandboxSettings.invincibility) {
+          if (levelConfig.walls) {
               for (const wall of levelConfig.walls) {
                   const wx = wall.position[0];
                   const wy = wall.position[1];
@@ -553,12 +604,6 @@ const Swarm: React.FC<SwarmProps> = ({
                   
                   if (localX > -halfW - pad && localX < halfW + pad && localY > -halfH - pad && localY < halfH + pad) {
                       
-                      if (Math.random() < 0.1) { 
-                          deathTimer[i] = 1.0; 
-                          collided = true;
-                          break;
-                      }
-
                       const distToLeft = localX - (-halfW);
                       const distToRight = halfW - localX;
                       const distToTop = halfH - localY;
@@ -587,8 +632,13 @@ const Swarm: React.FC<SwarmProps> = ({
                       if (dot < 0) { 
                           vx = vx - 2 * dot * worldNormX;
                           vy = vy - 2 * dot * worldNormY;
-                          vx *= 0.6; 
-                          vy *= 0.6;
+                          vx *= 0.8;
+                          vy *= 0.8;
+                          if (Math.random() < 0.05 && !sandboxSettings.invincibility) {
+                              deathTimer[i] = 1.0;
+                              collided = true;
+                              break;
+                          }
                       }
                   }
               }
@@ -600,6 +650,23 @@ const Swarm: React.FC<SwarmProps> = ({
 
       positions[idx] = x;
       positions[idx + 1] = y;
+
+      // --- RESTORED GOAL COLLECTION LOGIC ---
+      const dxTarget = x - targetPos.x;
+      const dyTarget = y - targetPos.y;
+      const distToTargetSq = dxTarget * dxTarget + dyTarget * dyTarget;
+      const targetRadius = levelConfig.targetRadius;
+
+      if (distToTargetSq < targetRadius * targetRadius) {
+          if (levelConfig.conversionRequired && chargeState[i] !== 1) {
+              // Rejected - not charged
+              deathTimer[i] = 1.0; // Play destruction animation
+          } else {
+              // Collected
+              life[i] = 0; // Deactivate particle
+              collectedThisFrame++;
+          }
+      }
 
       const friction = trait === TRAIT_TITAN ? 0.98 : (trait === TRAIT_GHOST ? 0.99 : FRICTION);
       vx *= friction;
@@ -627,7 +694,6 @@ const Swarm: React.FC<SwarmProps> = ({
       if (positions[idx + 1] > ARENA_BOUNDS.y) { positions[idx + 1] = ARENA_BOUNDS.y; velocities[idx + 1] *= -1; }
       if (positions[idx + 1] < -ARENA_BOUNDS.y) { positions[idx + 1] = -ARENA_BOUNDS.y; velocities[idx + 1] *= -1; }
       
-      // --- RENDER UPDATES ---
       let dispX = positions[idx];
       let dispY = positions[idx + 1];
 
@@ -674,7 +740,6 @@ const Swarm: React.FC<SwarmProps> = ({
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(i, dummy.matrix);
 
-      // Color Updates
       if (sandboxSettings.rainbowMode) {
           const hue = (state.clock.elapsedTime * 0.2 + (i * 0.001)) % 1;
           tempColor.setHSL(hue, 1, 0.6);
